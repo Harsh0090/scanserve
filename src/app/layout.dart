@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'page.dart';
+import 'onboarding_gate.dart';
 import 'context/AuthContext.dart';
 import 'context/OnboardingContext.dart';
 import 'context/TrialContext.dart';
@@ -70,7 +70,7 @@ final GoRouter _router = GoRouter(
   routes: [
     GoRoute(
       path: '/',
-      builder: (context, state) => const HomePage(),
+      builder: (context, state) => const OnboardingGate(),
     ),
     GoRoute(
       path: '/signup',

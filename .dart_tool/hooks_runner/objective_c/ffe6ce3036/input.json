@@ -21,8 +21,8 @@
     },
     "linking_enabled": false
   },
-  "out_dir_shared": "E:\\Flutter\\lakshay18-03\\lakshay18-03\\Frontend\\.dart_tool\\hooks_runner\\shared\\objective_c\\build\\",
-  "out_file": "E:\\Flutter\\lakshay18-03\\lakshay18-03\\Frontend\\.dart_tool\\hooks_runner\\objective_c\\ffe6ce3036\\output.json",
+  "out_dir_shared": "E:\\Flutter\\scanserve\\.dart_tool\\hooks_runner\\shared\\objective_c\\build\\",
+  "out_file": "E:\\Flutter\\scanserve\\.dart_tool\\hooks_runner\\objective_c\\ffe6ce3036\\output.json",
   "package_name": "objective_c",
   "package_root": "C:\\Users\\admin\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\objective_c-9.3.0\\",
   "user_defines": {}
