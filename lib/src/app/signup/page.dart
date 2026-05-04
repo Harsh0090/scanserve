@@ -22,6 +22,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
   final Map<String, dynamic> _form = {
     'organizationName': '',
     'businessType': '',
+    'mode': '',
     'email': '',
     'password': '',
     'phone': '',
@@ -72,6 +73,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
 
   bool get _isFormValid {
     return _form['businessType'] != '' &&
+           _form['mode'] != '' &&
            _form['organizationName'].toString().isNotEmpty &&
            _form['email'].toString().contains('@') &&
            _form['phone'].toString().length >= 10 &&
@@ -282,13 +284,38 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                                         ),
                                       ),
                                     ],
-                                    onChanged: (val) => setState(() => _form['businessType'] = val!),
+                                    onChanged: (val) => setState(() {
+                                      _form['businessType'] = val!;
+                                      _form['mode'] = ''; // Reset mode on business type change
+                                    }),
                                   ),
                                 ),
                               ),
                             ],
                           ),
                         ),
+
+                        if (_form['businessType'] != '') ...[
+                          _buildLabel('How will you use this?'),
+                          Column(
+                            children: [
+                              _buildModeCard(
+                                value: "quick",
+                                title: "Orders only",
+                                sub: "Fast mode — café, food truck, stall",
+                                bullets: ["1-tap order creation", "Auto token numbers", "Jumps straight to Preparing"],
+                              ),
+                              SizedBox(height: 12.h),
+                              _buildModeCard(
+                                value: "full",
+                                title: "Full setup",
+                                sub: "Restaurant, tables, kitchen display",
+                                bullets: ["Table management & QR menus", "Full lifecycle: Accept → Served", "GST billing"],
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 24.h),
+                        ],
 
                         _buildLabel('Brand Name'),
                         _buildTextField(LucideIcons.edit2, 'e.g. Scan Serve', (val) => _form['organizationName'] = val, false), // edit2 used securely
@@ -446,6 +473,75 @@ class _SignupPageState extends ConsumerState<SignupPage> {
           prefixIcon: Icon(icon, color: Colors.grey, size: 20.sp),
           border: InputBorder.none,
           contentPadding: EdgeInsets.symmetric(vertical: 18.h),
+        ),
+      ),
+    );
+  }
+  Widget _buildModeCard({
+    required String value,
+    required String title,
+    required String sub,
+    required List<String> bullets,
+  }) {
+    bool isSelected = _form['mode'] == value;
+    return InkWell(
+      onTap: () => setState(() => _form['mode'] = value),
+      borderRadius: BorderRadius.circular(16.r),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        padding: EdgeInsets.all(16.r),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFFFF7ED) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(16.r),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFFF5C00) : Colors.grey.shade200,
+            width: 2.r,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 14.sp,
+                fontWeight: FontWeight.w900,
+                color: const Color(0xFF0F172A),
+              ),
+            ),
+            SizedBox(height: 4.h),
+            Text(
+              sub,
+              style: TextStyle(
+                fontSize: 11.sp,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            SizedBox(height: 12.h),
+            ...bullets.map((b) => Padding(
+                  padding: EdgeInsets.only(bottom: 4.h),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 4.r,
+                        height: 4.r,
+                        decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle),
+                      ),
+                      SizedBox(width: 8.w),
+                      Text(
+                        b,
+                        style: TextStyle(
+                          fontSize: 11.sp,
+                          color: Colors.grey.shade500,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
         ),
       ),
     );
