@@ -45,6 +45,12 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _showQR = false;
   Map<String, dynamic>? _qrData;
 
+  // New states for sync with JS
+  String? _mode; // 'quick' | 'foodtruck' | 'restaurant'
+  bool _postOrderModal = false;
+  Map<String, dynamic>? _createdOrderRef;
+  bool _paymentProcessing = false;
+
   late TextEditingController _searchController = TextEditingController();
   String _searchQuery = "";
 
@@ -68,35 +74,39 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     final user = ref.read(authProvider).user;
     if (user == null || user['restaurantId'] == null) return;
 
-    // FIX H-06: single API call for businessType, no duplicate state source
+    // Priority: org mode first, then businessType fallback
     try {
       final res = await apiFetch(
         '/api/restaurants/${user['restaurantId']}/context',
       );
-      if (res['businessType'] == 'FOOD_TRUCK') {
-        setState(() {
+      setState(() {
+        if (res['orgMode'] == 'quick') {
+          _mode = 'quick';
+          _isFoodTruck = false;
+          _isRestaurant = false;
+        } else if (res['businessType'] == 'FOOD_TRUCK') {
+          _mode = 'foodtruck';
           _isFoodTruck = true;
           _isRestaurant = false;
-        });
-      } else {
-        setState(() {
+        } else {
+          _mode = 'restaurant';
           _isRestaurant = true;
           _isFoodTruck = false;
-        });
-      }
+        }
+      });
     } catch (e) {
       // fallback to cached businessType from user object
-      if (user['businessType'] == 'FOOD_TRUCK') {
-        setState(() {
+      setState(() {
+        if (user['businessType'] == 'FOOD_TRUCK') {
+          _mode = 'foodtruck';
           _isFoodTruck = true;
           _isRestaurant = false;
-        });
-      } else {
-        setState(() {
+        } else {
+          _mode = 'restaurant';
           _isRestaurant = true;
           _isFoodTruck = false;
-        });
-      }
+        }
+      });
     }
 
     await _fetchMenu(user['restaurantId']);
@@ -153,29 +163,21 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       return;
     }
 
-    if (_isFoodTruck) {
+    // Validation only for non-quick modes if needed (JS doesn't validate much in quick mode)
+    // Actually, JS validates foodtruck inputs before placing order in some versions,
+    // but the latest one seems to place order first and collect payment after.
+    // Wait, the latest JS code shows:
+    // if (mode === "foodtruck") { payload.paymentMode = "POSTPAID"; payload.customerPhone = null; }
+    // It doesn't seem to validate customerName before placing order in the LATEST version?
+    // Let's check:
+    // if (mode === "foodtruck") { if (!customerName) return toast.error("Customer name is required"); ... }
+    // Ah, it DOES validate customerName for foodtruck.
+
+    if (_mode == 'foodtruck') {
       if (_customerName.trim().isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Customer details required'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      if (_paymentMode == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please select payment status'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      if (_paymentMode == 'PREPAID' && _paymentMethod == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Select payment method'),
+            content: Text('Customer name is required'),
             backgroundColor: Colors.red,
           ),
         );
@@ -184,6 +186,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     }
 
     setState(() => _isOrdering = true);
+    ScaffoldMessenger.of(context).clearSnackBars(); // Clear previous toasts
 
     final Map<String, dynamic> payload = {
       'items': _cart.values
@@ -195,6 +198,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             },
           )
           .toList(),
+      'placedBy': 'STAFF',
     };
 
     try {
@@ -217,85 +221,68 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             ),
           );
         }
-        widget.onClose();
+        _resetAndClose();
         return;
       }
 
-      // PLACE NEW ORDER
-      if (_isRestaurant || _isFoodTruck) {
-        payload['placedBy'] = 'STAFF';
+      // ── QUICK MODE ───────────────────────────────────────────────────────
+      if (_mode == 'quick') {
+        payload['paymentMode'] = 'POSTPAID';
+        payload['customerPhone'] = null;
       }
 
-      if (_isRestaurant) {
+      // ── RESTAURANT MODE ──────────────────────────────────────────────────
+      if (_mode == 'restaurant') {
         payload['tableNumber'] = widget.table?['tableName'] ?? 'NA';
         payload['customerPhone'] = 'NA';
         payload['paymentMode'] = 'POSTPAID';
       }
 
-      if (_isFoodTruck) {
+      // ── FOOD TRUCK MODE ──────────────────────────────────────────────────
+      if (_mode == 'foodtruck') {
         payload['customerName'] = _customerName;
-        // The API might expect a string or conditionally handle phone
-        if (_customerPhone.isNotEmpty) {
-          payload['customerPhone'] = _customerPhone;
-        }
-        payload['paymentMode'] = _paymentMode;
-        if (_paymentMode == 'PREPAID') {
-          payload['paymentMethod'] = _paymentMethod;
-        }
+        payload['customerPhone'] = _customerPhone.isEmpty
+            ? null
+            : _customerPhone;
+        payload['paymentMode'] = 'POSTPAID'; // always POSTPAID first
       }
 
       final res = await apiFetch('/api/orders', method: 'POST', data: payload);
 
+      // Robustly extract the order object
+      dynamic createdOrder;
+      if (res is Map) {
+        createdOrder = res['data'] ?? res['order'] ?? res;
+      } else if (res is List && res.isNotEmpty) {
+        createdOrder = res[0];
+      } else {
+        createdOrder = res;
+      }
+
       if (mounted) {
         if (widget.onOrderPlaced != null) {
-          // Robustly extract the order object from common response wrappers
-          dynamic orderData;
-          if (res is Map) {
-            orderData = res['data'] ?? res['order'] ?? res;
-          } else if (res is List && res.isNotEmpty) {
-            orderData = res[0];
-          } else {
-            orderData = res;
-          }
-          widget.onOrderPlaced!(orderData);
+          widget.onOrderPlaced!(createdOrder);
         }
 
-        // 🔥 QR FLOW (ONLY FOOD TRUCK + UPI)
-        if (_isFoodTruck &&
-            _paymentMode == 'PREPAID' &&
-            _paymentMethod == 'UPI') {
-          try {
-            final paymentRes = await apiFetch('/api/restaurants/payment');
-            setState(() {
-              _qrData = paymentRes['payment'];
-              _showQR = true;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Scan QR to complete payment'),
-                backgroundColor: Colors.blue,
-              ),
-            );
-          } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to load QR code: $e'),
-                backgroundColor: Colors.red,
-              ),
-            );
-            // Fallback: close anyway if QR fails? Or stay open?
-            // React code stays open.
-          }
-        } else {
-          // NORMAL FLOW
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Order placed successfully!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          widget.onClose();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Order placed!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // ── For food truck: open payment picker modal ─────────────────────────
+        if (_mode == 'foodtruck') {
+          setState(() {
+            _createdOrderRef = createdOrder;
+            _postOrderModal = true;
+            _isOrdering = false;
+          });
+          return;
         }
+
+        // ── For other modes: close immediately ──────────────────────────────
+        _resetAndClose();
       }
     } catch (e) {
       if (mounted) {
@@ -309,6 +296,72 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     } finally {
       if (mounted) setState(() => _isOrdering = false);
     }
+  }
+
+  Future<void> _handlePostOrderPayment(String method) async {
+    if (method == 'PAY_LATER') {
+      _resetAndClose();
+      return;
+    }
+
+    try {
+      setState(() => _paymentProcessing = true);
+      await _collectPaymentRequest(_createdOrderRef!['_id'], method);
+
+      // UPI: show QR if restaurant has one set up
+      if (method == 'UPI') {
+        try {
+          final res = await apiFetch('/api/restaurants/payment');
+          if (res['payment'] != null && res['payment']['qrImageUrl'] != null) {
+            setState(() {
+              _qrData = res['payment'];
+              _postOrderModal = false;
+              _showQR = true;
+            });
+            return;
+          }
+        } catch (_) {
+          // no QR configured, fall through
+        }
+      }
+
+      _resetAndClose();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Payment failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _paymentProcessing = false);
+    }
+  }
+
+  Future<dynamic> _collectPaymentRequest(
+    String orderId,
+    String paymentMethod,
+  ) async {
+    return await apiFetch(
+      '/api/admin/orders/collect-payment',
+      method: 'PATCH',
+      data: {'orderId': orderId, 'paymentMethod': paymentMethod},
+    );
+  }
+
+  void _resetAndClose() {
+    setState(() {
+      _postOrderModal = false;
+      _createdOrderRef = null;
+      _cart = {};
+      _customerName = "";
+      _customerPhone = "";
+      _paymentMode = null;
+      _paymentMethod = null;
+    });
+    widget.onClose();
   }
 
   @override
@@ -506,8 +559,8 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                       ),
                     ),
 
-                    // FOOD TRUCK INPUTS
-                    if (_isFoodTruck)
+                    // FOOD TRUCK INPUTS — hidden in quick mode
+                    if (_mode == 'foodtruck')
                       SliverToBoxAdapter(
                         child: Container(
                           padding: EdgeInsets.all(24.r),
@@ -929,17 +982,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                       ),
                       SizedBox(height: 32.h),
                       ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            _showQR = false;
-                            _cart = {};
-                            _customerName = "";
-                            _customerPhone = "";
-                            _paymentMode = null;
-                            _paymentMethod = null;
-                          });
-                          widget.onClose();
-                        },
+                        onPressed: _resetAndClose,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
                           foregroundColor: Colors.white,
@@ -962,6 +1005,10 @@ class _MenuModalState extends ConsumerState<MenuModal> {
               ),
             ),
           ),
+
+        // 🔥 POST-ORDER PAYMENT MODAL (Food Truck only)
+        if (_postOrderModal && _createdOrderRef != null)
+          _buildPostOrderPaymentModal(),
       ],
     );
   }
@@ -1122,6 +1169,165 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           contentPadding: EdgeInsets.symmetric(
             horizontal: 16.w,
             vertical: 14.h,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostOrderPaymentModal() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withAlpha(120),
+        padding: EdgeInsets.all(24.r),
+        child: Center(
+          child: Container(
+            width: 320.w,
+            padding: EdgeInsets.all(32.r),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(32.r),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withAlpha(50), blurRadius: 30.r),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 64.r,
+                  height: 64.r,
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    LucideIcons.checkCircle2,
+                    color: Colors.green,
+                    size: 32.sp,
+                  ),
+                ),
+                SizedBox(height: 20.h),
+                Text(
+                  'Order Placed!',
+                  style: TextStyle(
+                    fontSize: 20.sp,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
+                SizedBox(height: 8.h),
+                Text(
+                  '#${_createdOrderRef!['_id'].toString().substring(_createdOrderRef!['_id'].toString().length - 4).toUpperCase()} ${_createdOrderRef!['customerName'] ?? ""}',
+                  style: TextStyle(
+                    fontSize: 12.sp,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                  ),
+                ),
+                SizedBox(height: 24.h),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                    vertical: 16.h,
+                    horizontal: 24.w,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(20.r),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'TOTAL AMOUNT',
+                        style: TextStyle(
+                          fontSize: 10.sp,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.grey,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                      SizedBox(height: 4.h),
+                      Text(
+                        '₹${_createdOrderRef!['totalAmount'] ?? 0}',
+                        style: TextStyle(
+                          fontSize: 28.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 24.h),
+                Text(
+                  'HOW ARE THEY PAYING?',
+                  style: TextStyle(
+                    fontSize: 10.sp,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.grey,
+                    letterSpacing: 1,
+                  ),
+                ),
+                SizedBox(height: 16.h),
+                _buildPostPaymentOption('CASH', '💵 Cash', Colors.black),
+                SizedBox(height: 12.h),
+                _buildPostPaymentOption('UPI', '📱 UPI', Colors.green),
+                SizedBox(height: 12.h),
+                _buildPostPaymentOption('CARD', '💳 Card', Colors.blue),
+                SizedBox(height: 12.h),
+                TextButton(
+                  onPressed: _paymentProcessing
+                      ? null
+                      : () => _handlePostOrderPayment('PAY_LATER'),
+                  child: _paymentProcessing
+                      ? SizedBox(
+                          width: 16.w,
+                          height: 16.h,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.grey,
+                          ),
+                        )
+                      : Text(
+                          'PAY LATER',
+                          style: TextStyle(
+                            fontSize: 12.sp,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.grey,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostPaymentOption(String method, String label, Color color) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: _paymentProcessing
+            ? null
+            : () => _handlePostOrderPayment(method),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          padding: EdgeInsets.symmetric(vertical: 16.h),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.r),
+          ),
+          elevation: 0,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14.sp,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
           ),
         ),
       ),
