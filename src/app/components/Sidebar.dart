@@ -47,6 +47,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
       "icon": LucideIcons.utensilsCrossed,
     },
     {
+      "name": "Inventory",
+      "href": "/dashboard/inventory",
+      "icon": LucideIcons.package,
+    },
+    {
       "name": "QR Print",
       "href": "/dashboard/tablegenerator",
       "icon": LucideIcons.qrCode,
@@ -95,6 +100,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 "Table Management",
                 "Expense Tracker",
                 "Menu Manager",
+                "Inventory",
                 "Payment Setup",
               ].contains(item['name']),
             )
@@ -108,6 +114,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 "Analytics",
                 "Expense Tracker",
                 "Menu Manager",
+                "Inventory",
                 "QR Print",
                 "Payment Setup",
               ].contains(item['name']),

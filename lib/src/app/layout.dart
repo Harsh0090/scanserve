@@ -16,6 +16,7 @@ import 'dashboard/analytics/page.dart';
 import 'dashboard/profit/page.dart';
 import 'dashboard/upsell/page.dart';
 import 'dashboard/menu/page.dart';
+import 'dashboard/inventory/page.dart';
 import 'dashboard/pos/page.dart';
 import 'dashboard/tablegenerator/page.dart';
 import 'dashboard/createmanager/page.dart';
@@ -106,6 +107,10 @@ final GoRouter _router = GoRouter(
         GoRoute(
           path: '/dashboard/menu',
           builder: (context, state) => const MenuPage(),
+        ),
+        GoRoute(
+          path: '/dashboard/inventory',
+          builder: (context, state) => const InventoryPage(),
         ),
         GoRoute(
           path: '/dashboard/pos',
