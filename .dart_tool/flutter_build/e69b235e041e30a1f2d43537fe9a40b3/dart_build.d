@@ -1,0 +1,1 @@
+ E:\\Flutter\\scanserve\\.dart_tool\\flutter_build\\e69b235e041e30a1f2d43537fe9a40b3\\dart_build_result.json:  C:\\src\\flutter\\bin\\cache\\dart-sdk\\version E:\\Flutter\\scanserve\\.dart_tool\\package_config.json E:\\Flutter\\scanserve\\pubspec.yaml e:\\flutter\\scanserve\\.dart_tool\\package_config.json

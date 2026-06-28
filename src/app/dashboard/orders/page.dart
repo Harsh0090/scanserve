@@ -21,7 +21,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   List<dynamic> _orders = [];
   List<dynamic> _servedOrders = [];
-  String _activeFilter = 'All';
+  List<dynamic> _payLaterOrders = [];
+  String _activeFilter = 'LIVE';
   String _searchQuery = '';
   bool _isLoading = false;
   // Removed local _businessTypeFoodTruck to use reactive authState
@@ -33,6 +34,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   String _newTableValue = '';
   String? _statusUpdating;
   bool _paymentModal = false;
+  dynamic _payLaterTarget;
+  dynamic _splitTarget;
+  bool _splitLoading = false;
+  String? _payLaterUpdating;
+  String? _paymentUpdating;
+  Map<String, dynamic>? _appendTarget;
 
   IO.Socket? _socket;
 
@@ -74,6 +81,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
     _setupSocket(restaurantId);
     await _fetchOrders();
+    await _fetchPayLaterOrders();
   }
 
   void _setupSocket(String restaurantId) {
@@ -96,37 +104,109 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       debugPrint('⚠️ Socket connection error: $err');
     });
 
-    _socket?.on('new_order', (data) {
+    void upsertOrder(dynamic data) {
       if (!mounted) return;
-      debugPrint('📩 New order received via socket: $data');
-      setState(() {
-        if (data is List) {
-          for (var o in data) {
-            if (o is Map) _orders.insert(0, o);
-          }
-        } else if (data is Map) {
-          _orders.insert(0, data);
-        }
-      });
-    });
-
-    _socket?.on('order_updated', (data) {
-      if (!mounted) return;
-      debugPrint('📩 Order updated via socket: $data');
-
-      final updatedOrder = (data is List && data.isNotEmpty) ? data[0] : data;
-      if (updatedOrder is! Map) return;
+      final newOrder = (data is List && data.isNotEmpty) ? data[0] : data;
+      if (newOrder is! Map) return;
 
       setState(() {
-        final orderId = updatedOrder['_id'];
+        final orderId = newOrder['_id'];
         final idx = _orders.indexWhere((o) => o is Map && o['_id'] == orderId);
         if (idx != -1) {
-          _orders[idx] = updatedOrder;
+          if (newOrder['type'] == 'ITEM_ADDED') {
+            final newItems = newOrder['newItems'];
+            if (newItems is List && newItems.isNotEmpty) {
+              final autoPrintKOT =
+                  ref.read(authProvider).user?['autoPrintKOT'] == true;
+              if (autoPrintKOT) {
+                _showKOTToast(_orders[idx], newItems, true);
+              }
+            }
+            _orders[idx] = {
+              ..._orders[idx] as Map,
+              'items': newOrder['items'] ?? _orders[idx]['items'],
+              'estimatedTotal':
+                  newOrder['estimatedTotal'] ?? _orders[idx]['estimatedTotal'],
+              'subTotal': newOrder['subTotal'] ?? _orders[idx]['subTotal'],
+              'updatedAt': newOrder['updatedAt'],
+            };
+          } else {
+            _orders[idx] = {..._orders[idx] as Map, ...newOrder};
+          }
         } else {
-          _orders.insert(0, updatedOrder);
+          _showKOTToast(newOrder, newOrder['items'] ?? [], false);
+          _orders.insert(0, newOrder);
         }
       });
+    }
+
+    _socket?.on('new_order', upsertOrder);
+    _socket?.on('order_status_changed', upsertOrder);
+    _socket?.on('order_modified', upsertOrder);
+    _socket?.on('order_updated', upsertOrder);
+
+    _socket?.on('order_cancelled', (data) {
+      if (!mounted) return;
+      final orderId = data is Map ? data['orderId'] : null;
+      if (orderId != null) {
+        setState(() {
+          _orders.removeWhere(
+            (o) => o is Map && o['_id'].toString() == orderId.toString(),
+          );
+        });
+      }
     });
+  }
+
+  void _showKOTToast(dynamic order, List<dynamic> itemsToShow, bool isAddOn) {
+    if (!mounted) return;
+    final kitchenItems = itemsToShow
+        .where((i) => i is Map && i['skipKitchen'] != true)
+        .toList();
+    if (kitchenItems.isEmpty) return;
+
+    final title = isAddOn ? "Add-on Order" : "New Order";
+    final table = order['tableNumber'] ?? order['customerName'] ?? "NA";
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Text('🧾 ', style: TextStyle(fontSize: 20)),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$title - $table',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    '${kitchenItems.length} items to print',
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'PRINT KOT',
+          textColor: Colors.orange,
+          onPressed: () {
+            // printKOT logic here
+            _printKOT(order, itemsToShow, isAddOn);
+          },
+        ),
+        duration: const Duration(seconds: 15),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _printKOT(dynamic order, List<dynamic> itemsToShow, bool isAddOn) {
+    debugPrint("Print KOT logic placeholder for order: ${order['_id']}");
   }
 
   Future<void> _fetchOrders() async {
@@ -157,10 +237,207 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     }
   }
 
+  Future<void> _fetchPayLaterOrders() async {
+    try {
+      final data = await apiFetch('/api/admin/orders/pay-later');
+      if (mounted && data is Map && data['orders'] != null) {
+        setState(
+          () => _payLaterOrders = data['orders'] is List ? data['orders'] : [],
+        );
+      }
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to fetch pay later orders: $e')),
+        );
+    }
+  }
+
+  Future<void> _clearPayLaterPayment(dynamic order, String method) async {
+    try {
+      setState(() => _paymentUpdating = '${order['_id']}-$method');
+      await apiFetch(
+        '/api/admin/orders/${order['_id']}/clear-pay-later',
+        method: 'PATCH',
+        data: {'paymentMethod': method},
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Payment collected via $method',
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+      setState(() {
+        _orders.removeWhere((o) => o is Map && o['_id'] == order['_id']);
+        _payLaterOrders.removeWhere(
+          (o) => o is Map && o['_id'] == order['_id'],
+        );
+      });
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Payment failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _paymentUpdating = null);
+    }
+  }
+
+  Future<void> _handleSplitPayment(
+    dynamic order,
+    List<Map<String, dynamic>> payments,
+  ) async {
+    try {
+      setState(() => _splitLoading = true);
+      await apiFetch(
+        '/api/orders/split-payment',
+        method: 'POST',
+        data: {'orderId': order['_id'], 'payments': payments},
+      );
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Split payment collected',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      setState(() => _splitTarget = null);
+      await _fetchOrders();
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+    } finally {
+      if (mounted) setState(() => _splitLoading = false);
+    }
+  }
+
+  Future<void> _handleCollectEarly(dynamic order, String method) async {
+    try {
+      setState(() => _paymentUpdating = '${order['_id']}-$method');
+      await apiFetch(
+        '/api/admin/orders/collect-payment',
+        method: 'PATCH',
+        data: {'orderId': order['_id'], 'paymentMethod': method},
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Payment collected via $method ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+      await _fetchOrders();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _paymentUpdating = null);
+    }
+  }
+
+  Future<void> _handlePayLater(
+    dynamic order,
+    String customerName,
+    num paidNow,
+    num? remaining,
+  ) async {
+    try {
+      setState(() => _payLaterUpdating = order['_id']);
+      final res = await apiFetch(
+        '/api/admin/orders/${order['_id']}/pay-later',
+        method: 'PATCH',
+        data: {
+          'customerName': customerName,
+          'paidNow': paidNow,
+          'remaining': remaining,
+        },
+      );
+      final updatedOrder = (res is Map && res['order'] != null)
+          ? res['order']
+          : res;
+      setState(() {
+        final idx = _orders.indexWhere(
+          (o) => o is Map && o['_id'] == order['_id'],
+        );
+        if (idx != -1) {
+          _orders[idx] = {
+            ..._orders[idx] as Map,
+            'customerName': updatedOrder['customerName'] ?? customerName,
+            'paymentStatus': 'PAY_LATER',
+            'status': 'SERVED',
+          };
+        }
+      });
+      await _fetchPayLaterOrders();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              paidNow > 0
+                  ? '₹$paidNow collected, ₹$remaining pending for $customerName'
+                  : 'Pay Later saved for $customerName',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+      setState(() => _payLaterTarget = null);
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to mark pay later: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _payLaterUpdating = null);
+    }
+  }
+
+  void _initiatePayLater(dynamic order) {
+    setState(() {
+      _payLaterTarget = {
+        'order': order,
+        'defaultName': order['customerName'] ?? '',
+      };
+    });
+  }
+
+  Future<dynamic> _removeItemFromOrder(String orderId, String itemId) async {
+    return await apiFetch(
+      '/api/admin/orders/$orderId/remove-item',
+      method: 'PATCH',
+      data: {'itemId': itemId},
+    );
+  }
+
   void _onFilterChanged(String filter) {
     setState(() => _activeFilter = filter);
     if (filter == 'SERVED' && _servedOrders.isEmpty) {
       _fetchServedOrders();
+    } else if (filter == 'PAY_LATER' && _payLaterOrders.isEmpty) {
+      _fetchPayLaterOrders();
     }
   }
 
@@ -377,8 +654,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final isMobile = 1.sw < 768;
     List<dynamic> displayList = _activeFilter == 'SERVED'
         ? _servedOrders
-        : _activeFilter == 'All'
+        : _activeFilter == 'PAY_LATER'
+        ? _payLaterOrders
+        : _activeFilter == 'LIVE'
         ? _orders
+              .where((o) => o is Map && o['status'] != 'SERVED' && o['paymentStatus'] != 'PAY_LATER')
+              .toList()
         : _orders
               .where((o) => o is Map && o['status'] == _activeFilter)
               .toList();
@@ -401,13 +682,21 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           .toList();
     }
 
-    final filters = ["All", "NEW", "ACCEPTED", "PREPARING", "READY", "SERVED"];
+    final filters = [
+      "LIVE",
+      "SERVED",
+      "PAY_LATER",
+    ];
     final topSelling = _getTopSelling();
 
     return Scaffold(
       key: _scaffoldKey,
       endDrawer: MenuModal(
-        onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
+        onClose: () {
+          _scaffoldKey.currentState?.closeEndDrawer();
+          setState(() => _appendTarget = null);
+        },
+        sendAppendOrder: _appendTarget,
         onOrderPlaced: (newOrder) {
           if (newOrder is Map) {
             setState(() {
@@ -514,8 +803,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 if (isFoodTruck) ...[
                                   SizedBox(width: 8.w),
                                   ElevatedButton.icon(
-                                    onPressed: () => _scaffoldKey.currentState
-                                        ?.openEndDrawer(),
+                                    onPressed: () {
+                                      setState(() => _appendTarget = null);
+                                      _scaffoldKey.currentState?.openEndDrawer();
+                                    },
                                     icon: Icon(LucideIcons.plus, size: 16.sp),
                                     label: Text(
                                       'CREATE ORDER',
@@ -636,8 +927,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 if (isFoodTruck) ...[
                                   SizedBox(width: 12.w),
                                   ElevatedButton.icon(
-                                    onPressed: () => _scaffoldKey.currentState
-                                        ?.openEndDrawer(),
+                                    onPressed: () {
+                                      setState(() => _appendTarget = null);
+                                      _scaffoldKey.currentState?.openEndDrawer();
+                                    },
                                     icon: Icon(LucideIcons.plus, size: 16.sp),
                                     label: Text(
                                       'CREATE ORDER',
@@ -673,14 +966,20 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         child: Row(
                           children: filters.map((f) {
                             final isActive = _activeFilter == f;
-                            final count = f == "All"
+                            final count = f == "LIVE"
                                 ? _orders
                                       .where(
                                         (o) =>
                                             o is Map &&
-                                            o['status'] != 'CANCELLED',
+                                            o['status'] != 'CANCELLED' &&
+                                            o['status'] != 'SERVED' &&
+                                            o['paymentStatus'] != 'PAY_LATER',
                                       )
                                       .length
+                                : f == "SERVED"
+                                ? _servedOrders.length
+                                : f == "PAY_LATER"
+                                ? _payLaterOrders.length
                                 : _orders
                                       .where(
                                         (o) => o is Map && o['status'] == f,
@@ -710,7 +1009,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   child: Row(
                                     children: [
                                       Text(
-                                        f == "PREPARING" ? "COOKING" : f,
+                                        f == "PREPARING"
+                                            ? "COOKING"
+                                            : f == "PAY_LATER"
+                                            ? "PAY LATER"
+                                            : f,
                                         style: TextStyle(
                                           fontSize: 11.sp,
                                           fontWeight: FontWeight.w900,
@@ -897,6 +1200,61 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           ),
                         ),
 
+                      if (_activeFilter == 'PAY_LATER')
+                        Container(
+                          margin: EdgeInsets.only(top: 24.h),
+                          padding: EdgeInsets.all(24.r),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFFFFF7ED), Color(0xFFFFF1F2)],
+                            ),
+                            borderRadius: BorderRadius.circular(32.r),
+                            border: Border.all(
+                              color: Colors.orange.withOpacity(0.2),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: EdgeInsets.all(12.r),
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.receipt_long,
+                                  color: Colors.orange,
+                                  size: 24.sp,
+                                ),
+                              ),
+                              SizedBox(width: 16.w),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'PAY LATER ORDERS',
+                                      style: TextStyle(
+                                        fontSize: 16.sp,
+                                        fontWeight: FontWeight.w900,
+                                        color: const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                    SizedBox(height: 4.h),
+                                    Text(
+                                      'Orders marked for payment collection later.',
+                                      style: TextStyle(
+                                        fontSize: 12.sp,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
                       // Close the main Column's children
                     ],
                   ), // Close main Column
@@ -929,7 +1287,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             ),
                             SizedBox(height: 16.h),
                             Text(
-                              'NO ACTIVE ORDERS',
+                              _activeFilter == 'PAY_LATER'
+                                  ? 'NO PAY LATER ORDERS'
+                                  : 'NO ACTIVE ORDERS',
                               style: TextStyle(
                                 fontSize: 20.sp,
                                 fontWeight: FontWeight.w900,
@@ -940,6 +1300,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             Text(
                               _activeFilter == 'All'
                                   ? 'Kitchen is quiet... Maybe the chef is taking a nap? 💤'
+                                  : _activeFilter == 'PAY_LATER'
+                                  ? 'No pending pay later orders.'
                                   : 'No orders in $_activeFilter stage.',
                               style: TextStyle(
                                 fontSize: 12.sp,
@@ -963,7 +1325,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           maxCrossAxisExtent: 400.w,
                           mainAxisSpacing: 24.h,
                           crossAxisSpacing: 24.w,
-                          childAspectRatio: isMobile ? 0.70 : 0.75,
+                          childAspectRatio: isMobile ? 0.65 : 0.70,
                         ),
                         delegate: SliverChildBuilderDelegate((context, index) {
                           final order = displayList[index];
@@ -1037,8 +1399,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                                   vertical: 4.h,
                                                 ),
                                                 decoration: BoxDecoration(
-                                                  color: status == 'READY'
-                                                      ? Colors.green.shade50
+                                                  color: status == 'PREPARING'
+                                                      ? Colors.purple.shade50
                                                       : status == 'ACCEPTED'
                                                       ? Colors.orange.shade50
                                                       : Colors.blue.shade50,
@@ -1050,30 +1412,74 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                                 child: Text(
                                                   status == 'PREPARING'
                                                       ? 'COOKING'
+                                                      : status == 'PAY_LATER'
+                                                      ? 'PAY LATER'
                                                       : status,
                                                   style: TextStyle(
                                                     fontSize: 10.sp,
                                                     fontWeight: FontWeight.w900,
-                                                    color: status == 'READY'
-                                                        ? Colors.green
+                                                    color: status == 'PREPARING'
+                                                        ? Colors.purple
                                                         : status == 'ACCEPTED'
                                                         ? Colors.orange
                                                         : Colors.blue,
                                                   ),
                                                 ),
                                               ),
-                                              Padding(
-                                                padding: EdgeInsets.only(
-                                                  right: 60.0.w,
-                                                ),
-                                                child: Text(
-                                                  '#${(order['_id']?.toString() ?? '....').substring((order['_id']?.toString() ?? '....').length - 4).toUpperCase()}',
-                                                  style: TextStyle(
-                                                    fontSize: 10.sp,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.grey,
+                                              Row(
+                                                children: [
+                                                  if (order['paymentStatus'] ==
+                                                      'PAY_LATER')
+                                                    Container(
+                                                      margin: EdgeInsets.only(
+                                                        right: 8.w,
+                                                      ),
+                                                      padding:
+                                                          EdgeInsets.symmetric(
+                                                            horizontal: 6.w,
+                                                            vertical: 2.h,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors
+                                                            .orange
+                                                            .shade50,
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              12.r,
+                                                            ),
+                                                        border: Border.all(
+                                                          color: Colors
+                                                              .orange
+                                                              .shade200,
+                                                        ),
+                                                      ),
+                                                      child: Text(
+                                                        'PAY LATER',
+                                                        style: TextStyle(
+                                                          fontSize: 8.sp,
+                                                          fontWeight:
+                                                              FontWeight.w900,
+                                                          color: Colors
+                                                              .orange
+                                                              .shade700,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  Padding(
+                                                    padding: EdgeInsets.only(
+                                                      right: 60.0.w,
+                                                    ),
+                                                    child: Text(
+                                                      '#${(order['_id']?.toString() ?? '....').substring((order['_id']?.toString() ?? '....').length - 4).toUpperCase()}',
+                                                      style: TextStyle(
+                                                        fontSize: 10.sp,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Colors.grey,
+                                                      ),
+                                                    ),
                                                   ),
-                                                ),
+                                                ],
                                               ),
                                             ],
                                           ),
@@ -1162,7 +1568,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 // Items List
                                 Expanded(
                                   child: Container(
-                                    padding: EdgeInsets.all(24.r),
+                                    padding: EdgeInsets.symmetric(horizontal: 24.r, vertical: 12.r),
                                     decoration: BoxDecoration(
                                       color: isPending
                                           ? Colors.red.withAlpha(10)
@@ -1175,12 +1581,15 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                         ),
                                       ),
                                     ),
-                                    child: ListView.builder(
-                                      itemCount: (items is List)
-                                          ? items.length
-                                          : 0,
-                                      itemBuilder: (ctx, iIdx) {
-                                        final item = items[iIdx];
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                                      children: [
+                                        Flexible(
+                                          child: ListView.builder(
+                                            shrinkWrap: true,
+                                            itemCount: (items is List) ? items.length : 0,
+                                            itemBuilder: (ctx, iIdx) {
+                                              final item = items[iIdx];
                                         if (item is! Map)
                                           return const SizedBox.shrink();
                                         final itemData = item['item'];
@@ -1255,170 +1664,406 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                                   color: Colors.grey,
                                                 ),
                                               ),
+                                              if (_activeFilter != 'SERVED' &&
+                                                  status != 'READY' &&
+                                                  status != 'SERVED' &&
+                                                  (items is List &&
+                                                      items.length > 1)) ...[
+                                                SizedBox(width: 4.w),
+                                                InkWell(
+                                                  onTap: () {
+                                                    final itemId =
+                                                        item['_id'] ??
+                                                        item['item']?['_id'];
+                                                    if (itemId != null) {
+                                                      _removeItemFromOrder(
+                                                        order['_id'],
+                                                        itemId,
+                                                      );
+                                                    }
+                                                  },
+                                                  child: Container(
+                                                    padding: EdgeInsets.all(
+                                                      4.r,
+                                                    ),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.red.shade50,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4.r,
+                                                          ),
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.close,
+                                                      size: 14.sp,
+                                                      color: Colors.red,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ],
                                           ),
                                         );
                                       },
                                     ),
                                   ),
-                                ),
+                                  Builder(
+                                    builder: (context) {
+                                      bool isServed = order['status'] == 'SERVED' && order['paymentStatus'] != 'PAY_LATER';
+                                      if (!isServed && order['paymentStatus'] != 'PAY_LATER' && _activeFilter != 'SERVED') {
+                                        return Padding(
+                                          padding: EdgeInsets.only(top: 8.h),
+                                          child: OutlinedButton.icon(
+                                            onPressed: () {
+                                              setState(() {
+                                                _appendTarget = {
+                                                  'currentOrderId': order['_id'],
+                                                  'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}'
+                                                };
+                                              });
+                                              _scaffoldKey.currentState?.openEndDrawer();
+                                            },
+                                            icon: Icon(LucideIcons.plus, size: 10.sp),
+                                            label: Text(
+                                              'ADD ITEMS',
+                                              style: TextStyle(
+                                                fontSize: 8.sp,
+                                                fontWeight: FontWeight.w900,
+                                                color: Colors.grey.shade400,
+                                                letterSpacing: 1.w,
+                                              ),
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              padding: EdgeInsets.symmetric(vertical: 8.h),
+                                              side: BorderSide(color: Colors.grey.shade200, width: 1.r),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(12.r),
+                                              ),
+                                              foregroundColor: Colors.grey.shade400,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                      return const SizedBox.shrink();
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
 
-                                // Bottom Actions
-                                Padding(
-                                  padding: EdgeInsets.all(24.0.r),
-                                  child: Column(
-                                    children: [
-                                      if (order['paymentStatus'] == 'PENDING' &&
-                                          isFoodTruck) ...[
-                                        Container(
-                                          padding: EdgeInsets.symmetric(
-                                            horizontal: 12.w,
-                                            vertical: 4.h,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.red.shade50,
-                                            borderRadius: BorderRadius.circular(
-                                              16.r,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            'PAYMENT PENDING',
-                                            style: TextStyle(
-                                              color: Colors.red,
-                                              fontSize: 9.sp,
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                        ),
-                                        SizedBox(height: 8.h),
-                                      ],
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
+                          // Bottom Actions
+                          Builder(
+                                  builder: (context) {
+                                    bool isPaid = order['paymentMethod'] != null && order['paymentMethod'].toString().isNotEmpty;
+                                    bool isServed = order['status'] == 'SERVED' && order['paymentStatus'] != 'PAY_LATER';
+                                    
+                                    return Padding(
+                                      padding: EdgeInsets.all(24.0.r),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.stretch,
                                         children: [
-                                          Text(
-                                            'TOTAL BILL',
-                                            style: TextStyle(
-                                              fontSize: 10.sp,
-                                              fontWeight: FontWeight.w900,
-                                              color: Colors.grey,
-                                              letterSpacing: 2.w,
-                                            ),
-                                          ),
-                                          Text(
-                                            '₹$total',
-                                            style: TextStyle(
-                                              fontSize: 24.sp,
-                                              fontWeight: FontWeight.w900,
-                                              color: const Color(0xFF0F172A),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      if (_activeFilter != 'SERVED') ...[
-                                        SizedBox(height: 16.h),
-                                        Row(
-                                          children: [
-                                            if (status == 'NEW') ...[
-                                              Expanded(
-                                                child: ElevatedButton(
-                                                  onPressed: () => _cancelOrder(
-                                                    order['_id'],
-                                                  ),
-                                                  style: ElevatedButton.styleFrom(
-                                                    backgroundColor:
-                                                        Colors.grey.shade100,
-                                                    foregroundColor: Colors.red,
-                                                    padding:
-                                                        EdgeInsets.symmetric(
-                                                          vertical: 20.h,
-                                                        ),
-                                                    shape: RoundedRectangleBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            20.r,
-                                                          ),
-                                                    ),
-                                                    elevation: 0,
-                                                  ),
-                                                  child: Text(
-                                                    'CANCEL',
-                                                    style: TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w900,
-                                                      fontSize: 10.sp,
-                                                      letterSpacing: 1.w,
-                                                    ),
-                                                  ),
+                                          // TOTAL BILL section
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                'TOTAL',
+                                                style: TextStyle(
+                                                  fontSize: 10.sp,
+                                                  fontWeight: FontWeight.w900,
+                                                  color: Colors.grey.shade400,
+                                                  letterSpacing: 2.w,
                                                 ),
                                               ),
-                                              SizedBox(width: 12.w),
+                                              Text(
+                                                '₹$total',
+                                                style: TextStyle(
+                                                  fontSize: 24.sp,
+                                                  fontWeight: FontWeight.w900,
+                                                  color: const Color(0xFF0F172A),
+                                                ),
+                                              ),
                                             ],
-                                            Expanded(
-                                              flex: status == 'NEW' ? 2 : 1,
-                                              child: ElevatedButton(
-                                                onPressed: () {
-                                                  String next = status == 'NEW'
-                                                      ? 'ACCEPTED'
-                                                      : status == 'ACCEPTED'
-                                                      ? 'PREPARING'
-                                                      : status == 'PREPARING'
-                                                      ? 'READY'
-                                                      : 'SERVED';
-                                                  if (isFoodTruck &&
-                                                      next == 'SERVED' &&
-                                                      order['paymentStatus'] ==
-                                                          'PENDING') {
-                                                    setState(() {
-                                                      _paymentOrder = order;
-                                                      _paymentModal = true;
-                                                    });
-                                                    return;
-                                                  }
-                                                  _updateStatus(order, next);
-                                                },
-                                                style: ElevatedButton.styleFrom(
-                                                  backgroundColor:
-                                                      status == 'READY'
-                                                      ? Colors.green
-                                                      : status == 'ACCEPTED'
-                                                      ? Colors.orange
-                                                      : const Color(0xFF0F172A),
-                                                  padding: EdgeInsets.symmetric(
-                                                    vertical: 20.h,
+                                          ),
+                                          SizedBox(height: 16.h),
+                                          
+                                          // PAY_LATER breakdown info (if applicable)
+                                          if (order['paymentStatus'] == 'PAY_LATER' && order['paidAmount'] != null && (num.tryParse(order['paidAmount'].toString()) ?? 0) > 0) ...[
+                                            Container(
+                                              padding: EdgeInsets.all(12.r),
+                                              margin: EdgeInsets.only(bottom: 16.h),
+                                              decoration: BoxDecoration(
+                                                color: Colors.orange.shade50,
+                                                borderRadius: BorderRadius.circular(16.r),
+                                              ),
+                                              child: Column(
+                                                children: [
+                                                  Row(
+                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                    children: [
+                                                      Text('PAID NOW', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.green)),
+                                                      Text('₹${order['paidAmount']}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: Colors.green)),
+                                                    ],
                                                   ),
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          20.r,
-                                                        ),
+                                                  Divider(height: 16.h, color: Colors.orange.shade200),
+                                                  Row(
+                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                    children: [
+                                                      Text('REMAINING', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
+                                                      Text('₹${order['remainingAmount']}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
+                                                    ],
                                                   ),
-                                                ),
-                                                child: Text(
-                                                  _statusUpdating ==
-                                                          order['_id']
-                                                      ? 'WAIT...'
-                                                      : status == 'NEW'
-                                                      ? 'ACCEPT'
-                                                      : status == 'ACCEPTED'
-                                                      ? 'COOKING'
-                                                      : status == 'PREPARING'
-                                                      ? 'READY'
-                                                      : 'SERVE',
-                                                  style: TextStyle(
-                                                    fontWeight: FontWeight.w900,
-                                                    color: Colors.white,
-                                                    fontSize: 10.sp,
-                                                    letterSpacing: 1.w,
-                                                  ),
-                                                ),
+                                                ],
                                               ),
                                             ),
                                           ],
-                                        ),
-                                      ],
-                                    ],
-                                  ),
+
+                                          // STATE 1: PAY_LATER tab collection
+                                          if (_activeFilter == 'PAY_LATER') ...[
+                                            Text(
+                                              'COLLECT PAYMENT',
+                                              style: TextStyle(
+                                                fontSize: 9.sp,
+                                                fontWeight: FontWeight.w900,
+                                                color: Colors.orange.shade600,
+                                                letterSpacing: 2.w,
+                                              ),
+                                            ),
+                                            SizedBox(height: 12.h),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _clearPayLaterPayment(order, 'CASH'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.amber.shade50,
+                                                      foregroundColor: Colors.amber.shade700,
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(_paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                                                  ),
+                                                ),
+                                                SizedBox(width: 8.w),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _clearPayLaterPayment(order, 'UPI'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.amber.shade50,
+                                                      foregroundColor: Colors.amber.shade700,
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(_paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                                                  ),
+                                                ),
+                                                SizedBox(width: 8.w),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _clearPayLaterPayment(order, 'CARD'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.amber.shade50,
+                                                      foregroundColor: Colors.amber.shade700,
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(_paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ]
+                                          // STATE 2: PAID STATE (Image 2)
+                                          else if (isPaid && !isServed) ...[
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  flex: 1,
+                                                  child: Container(
+                                                    padding: EdgeInsets.symmetric(vertical: 16.h),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.green.shade50,
+                                                      borderRadius: BorderRadius.horizontal(left: Radius.circular(20.r)),
+                                                    ),
+                                                    child: Center(
+                                                      child: Text(
+                                                        '✓ PAID VIA ${order['paymentMethod']}',
+                                                        style: TextStyle(
+                                                          fontSize: 10.sp,
+                                                          fontWeight: FontWeight.w900,
+                                                          color: Colors.green.shade700,
+                                                          letterSpacing: 1.w,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                                Expanded(
+                                                  flex: 1,
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _updateStatus(order, 'SERVED'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: const Color(0xFF10B981), // Emerald 500
+                                                      padding: EdgeInsets.symmetric(vertical: 16.h),
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.horizontal(right: Radius.circular(20.r)),
+                                                      ),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(
+                                                      _statusUpdating == order['_id'] ? 'WAIT...' : 'CHECKOUT',
+                                                      style: TextStyle(
+                                                        fontSize: 10.sp,
+                                                        fontWeight: FontWeight.w900,
+                                                        color: Colors.white,
+                                                        letterSpacing: 1.w,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ]
+                                          // STATE 3: UNPAID STATE (Image 1)
+                                          else if (!isPaid && !isServed) ...[
+                                            Text(
+                                              'COLLECT PAYMENT',
+                                              style: TextStyle(
+                                                fontSize: 9.sp,
+                                                fontWeight: FontWeight.w900,
+                                                color: Colors.orange.shade600,
+                                                letterSpacing: 2.w,
+                                              ),
+                                            ),
+                                            SizedBox(height: 12.h),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _handleCollectEarly(order, 'CASH'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.grey.shade100,
+                                                      foregroundColor: const Color(0xFF0F172A),
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(_paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                                                  ),
+                                                ),
+                                                SizedBox(width: 8.w),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _handleCollectEarly(order, 'UPI'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.grey.shade100,
+                                                      foregroundColor: const Color(0xFF0F172A),
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(_paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                                                  ),
+                                                ),
+                                                SizedBox(width: 8.w),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _handleCollectEarly(order, 'CARD'),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.grey.shade100,
+                                                      foregroundColor: const Color(0xFF0F172A),
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(_paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            SizedBox(height: 8.h),
+                                            ElevatedButton(
+                                              onPressed: () => setState(() => _splitTarget = order),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.purple.shade50,
+                                                foregroundColor: Colors.purple.shade600,
+                                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius: BorderRadius.circular(12.r),
+                                                  side: BorderSide(color: Colors.purple.shade100),
+                                                ),
+                                                elevation: 0,
+                                              ),
+                                              child: Text(
+                                                '✂ SPLIT',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w900,
+                                                  fontSize: 10.sp,
+                                                  letterSpacing: 1.w,
+                                                ),
+                                              ),
+                                            ),
+                                            SizedBox(height: 8.h),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _initiatePayLater(order),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.amber.shade50,
+                                                      foregroundColor: Colors.amber.shade700,
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.circular(12.r),
+                                                        side: BorderSide(color: Colors.amber.shade200),
+                                                      ),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(
+                                                      _payLaterUpdating == order['_id'] ? '...' : 'PAY LATER',
+                                                      style: TextStyle(
+                                                        fontWeight: FontWeight.w900,
+                                                        fontSize: 10.sp,
+                                                        letterSpacing: 1.w,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                                SizedBox(width: 8.w),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _cancelOrder(order['_id']),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.red.shade50,
+                                                      foregroundColor: Colors.red.shade600,
+                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.circular(12.r),
+                                                        side: BorderSide(color: Colors.red.shade100),
+                                                      ),
+                                                      elevation: 0,
+                                                    ),
+                                                    child: Text(
+                                                      'CANCEL',
+                                                      style: TextStyle(
+                                                        fontWeight: FontWeight.w900,
+                                                        fontSize: 10.sp,
+                                                        letterSpacing: 1.w,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
@@ -1433,6 +2078,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           if (_shiftingOrder != null) _buildShiftModal(),
           if (_viewDetails != null) _buildDetailsModal(),
           if (_paymentModal) _buildPaymentModal(),
+          if (_payLaterTarget != null) _buildPayLaterModal(),
+          if (_splitTarget != null) _buildSplitPaymentModal(),
         ],
       ),
     );
@@ -1775,6 +2422,723 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     fontWeight: FontWeight.w900,
                   ),
                 ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPayLaterModal() {
+    return PayLaterModalWidget(
+      order: _payLaterTarget['order'],
+      defaultName: _payLaterTarget['defaultName'],
+      onConfirm: (name, paidNow, remaining) {
+        _handlePayLater(_payLaterTarget['order'], name, paidNow, remaining);
+      },
+      onCancel: () => setState(() => _payLaterTarget = null),
+    );
+  }
+
+  Widget _buildSplitPaymentModal() {
+    return SplitPaymentModalWidget(
+      order: _splitTarget,
+      isLoading: _splitLoading,
+      onConfirm: (payments) {
+        _handleSplitPayment(_splitTarget, payments);
+      },
+      onCancel: () => setState(() => _splitTarget = null),
+    );
+  }
+}
+
+class PayLaterModalWidget extends StatefulWidget {
+  final dynamic order;
+  final String defaultName;
+  final Function(String, num, num?) onConfirm;
+  final VoidCallback onCancel;
+
+  const PayLaterModalWidget({
+    Key? key,
+    required this.order,
+    required this.defaultName,
+    required this.onConfirm,
+    required this.onCancel,
+  }) : super(key: key);
+
+  @override
+  _PayLaterModalWidgetState createState() => _PayLaterModalWidgetState();
+}
+
+class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
+  late TextEditingController _nameCtrl;
+  late TextEditingController _paidCtrl;
+  bool _partialMode = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.defaultName);
+    _paidCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _paidCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    num orderTotal = 0;
+    if (widget.order['items'] is List) {
+      for (var i in widget.order['items']) {
+        final price =
+            num.tryParse(
+              ((i['item'] is Map ? i['item']['branchPrice'] : null) ??
+                      i['basePrice'] ??
+                      0)
+                  .toString(),
+            ) ??
+            0;
+        final qty = num.tryParse((i['quantity'] ?? 1).toString()) ?? 1;
+        orderTotal += (price * qty);
+      }
+    }
+
+    final paidNowVal = num.tryParse(_paidCtrl.text) ?? 0;
+    final remaining = (orderTotal > 0 && paidNowVal > 0)
+        ? (orderTotal - paidNowVal)
+        : null;
+
+    final isConfirmDisabled =
+        _nameCtrl.text.trim().isEmpty ||
+        (_partialMode && paidNowVal > 0 && paidNowVal >= orderTotal);
+
+    return Container(
+      color: const Color(0xFF0F172A).withAlpha(150),
+      alignment: Alignment.center,
+      padding: EdgeInsets.all(24.r),
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 400.w,
+          padding: EdgeInsets.all(32.r),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(48.r),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    LucideIcons.alertCircle,
+                    color: Colors.orange,
+                    size: 28.sp,
+                  ),
+                  SizedBox(width: 12.w),
+                  Text(
+                    'PAY LATER',
+                    style: TextStyle(
+                      fontSize: 20.sp,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF0F172A),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 8.h),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Enter customer name to track this order',
+                  style: TextStyle(
+                    fontSize: 10.sp,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                    letterSpacing: 1.w,
+                  ),
+                ),
+              ),
+              SizedBox(height: 24.h),
+              TextField(
+                controller: _nameCtrl,
+                autofocus: true,
+                onChanged: (v) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: 'Customer name...',
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24.r),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: EdgeInsets.all(20.r),
+                ),
+                style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900),
+              ),
+              SizedBox(height: 16.h),
+              if (orderTotal > 0)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        _partialMode = !_partialMode;
+                        _paidCtrl.clear();
+                      });
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _partialMode
+                          ? Colors.orange.shade50
+                          : Colors.grey.shade50,
+                      foregroundColor: _partialMode
+                          ? Colors.orange
+                          : Colors.grey,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16.r),
+                      ),
+                      padding: EdgeInsets.symmetric(vertical: 16.h),
+                    ),
+                    child: Text(
+                      _partialMode
+                          ? 'Partial payment ON'
+                          : 'Paid something now? (optional)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11.sp,
+                      ),
+                    ),
+                  ),
+                ),
+              if (_partialMode) ...[
+                SizedBox(height: 16.h),
+                TextField(
+                  controller: _paidCtrl,
+                  keyboardType: TextInputType.number,
+                  onChanged: (v) => setState(() {}),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(
+                      Icons.currency_rupee,
+                      color: Colors.grey,
+                    ),
+                    hintText: 'Amount paid now...',
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24.r),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: EdgeInsets.all(20.r),
+                  ),
+                  style: TextStyle(
+                    fontSize: 18.sp,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (paidNowVal > 0) ...[
+                  SizedBox(height: 16.h),
+                  Container(
+                    padding: EdgeInsets.all(16.r),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(16.r),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'TOTAL BILL',
+                              style: TextStyle(
+                                fontSize: 10.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            Text(
+                              '₹$orderTotal',
+                              style: TextStyle(
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.black87,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8.h),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'PAID NOW',
+                              style: TextStyle(
+                                fontSize: 10.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.green,
+                              ),
+                            ),
+                            Text(
+                              '- ₹$paidNowVal',
+                              style: TextStyle(
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Divider(height: 24.h),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'REMAINING',
+                              style: TextStyle(
+                                fontSize: 10.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.orange,
+                              ),
+                            ),
+                            Text(
+                              '₹$remaining',
+                              style: TextStyle(
+                                fontSize: 16.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.orange,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+              SizedBox(height: 24.h),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: widget.onCancel,
+                      child: Text(
+                        'CANCEL',
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11.sp,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: isConfirmDisabled
+                          ? null
+                          : () {
+                              widget.onConfirm(
+                                _nameCtrl.text.trim(),
+                                _partialMode ? paidNowVal : 0,
+                                _partialMode && paidNowVal > 0
+                                    ? remaining
+                                    : orderTotal,
+                              );
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 20.h),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16.r),
+                        ),
+                      ),
+                      child: Text(
+                        'CONFIRM',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11.sp,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SplitPaymentModalWidget extends StatefulWidget {
+  final dynamic order;
+  final bool isLoading;
+  final Function(List<Map<String, dynamic>>) onConfirm;
+  final VoidCallback onCancel;
+
+  const SplitPaymentModalWidget({
+    Key? key,
+    required this.order,
+    required this.isLoading,
+    required this.onConfirm,
+    required this.onCancel,
+  }) : super(key: key);
+
+  @override
+  _SplitPaymentModalWidgetState createState() =>
+      _SplitPaymentModalWidgetState();
+}
+
+class _SplitPaymentModalWidgetState extends State<SplitPaymentModalWidget> {
+  String _method1 = "CASH";
+  String _method2 = "UPI";
+  final TextEditingController _amt1Ctrl = TextEditingController();
+
+  final List<String> methods = ["CASH", "UPI", "CARD"];
+
+  @override
+  void dispose() {
+    _amt1Ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    num orderTotal = 0;
+    if (widget.order['items'] is List) {
+      for (var i in widget.order['items']) {
+        final price =
+            num.tryParse(
+              ((i['item'] is Map ? i['item']['branchPrice'] : null) ??
+                      i['basePrice'] ??
+                      0)
+                  .toString(),
+            ) ??
+            0;
+        final qty = num.tryParse((i['quantity'] ?? 1).toString()) ?? 1;
+        orderTotal += (price * qty);
+      }
+    }
+
+    final amt1 = num.tryParse(_amt1Ctrl.text) ?? 0;
+    final amt2 = _amt1Ctrl.text.isNotEmpty
+        ? (orderTotal - amt1 > 0 ? orderTotal - amt1 : 0)
+        : 0;
+
+    final isValid = _method1 != _method2 && amt1 > 0 && amt1 < orderTotal;
+
+    return Container(
+      color: const Color(0xFF0F172A).withAlpha(150),
+      alignment: Alignment.center,
+      padding: EdgeInsets.all(24.r),
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 400.w,
+          padding: EdgeInsets.all(32.r),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(48.r),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.currency_rupee, color: Colors.purple, size: 28.sp),
+                  SizedBox(width: 12.w),
+                  Text(
+                    'SPLIT PAYMENT',
+                    style: TextStyle(
+                      fontSize: 20.sp,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF0F172A),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 8.h),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Total: ₹$orderTotal',
+                  style: TextStyle(
+                    fontSize: 11.sp,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                    letterSpacing: 1.w,
+                  ),
+                ),
+              ),
+              SizedBox(height: 24.h),
+
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'FIRST PAYMENT METHOD',
+                  style: TextStyle(
+                    fontSize: 10.sp,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.grey,
+                    letterSpacing: 1.w,
+                  ),
+                ),
+              ),
+              SizedBox(height: 8.h),
+              Row(
+                children: methods
+                    .map(
+                      (m) => Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4.w),
+                          child: ElevatedButton(
+                            onPressed: () {
+                              setState(() {
+                                _method1 = m;
+                                if (m == _method2) {
+                                  _method2 = methods.firstWhere(
+                                    (x) => x != m && x != _method1,
+                                    orElse: () =>
+                                        methods.firstWhere((x) => x != m),
+                                  );
+                                }
+                              });
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _method1 == m
+                                  ? Colors.purple.shade50
+                                  : Colors.grey.shade50,
+                              foregroundColor: _method1 == m
+                                  ? Colors.purple
+                                  : Colors.grey,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12.r),
+                                side: BorderSide(
+                                  color: _method1 == m
+                                      ? Colors.purple.shade200
+                                      : Colors.transparent,
+                                ),
+                              ),
+                            ),
+                            child: Text(
+                              m,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 10.sp,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+              SizedBox(height: 16.h),
+              TextField(
+                controller: _amt1Ctrl,
+                keyboardType: TextInputType.number,
+                onChanged: (v) => setState(() {}),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(
+                    Icons.currency_rupee,
+                    color: Colors.grey,
+                  ),
+                  hintText: 'Amount paid by $_method1...',
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24.r),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: EdgeInsets.all(20.r),
+                ),
+                style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900),
+              ),
+              SizedBox(height: 24.h),
+
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'SECOND PAYMENT METHOD',
+                  style: TextStyle(
+                    fontSize: 10.sp,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.grey,
+                    letterSpacing: 1.w,
+                  ),
+                ),
+              ),
+              SizedBox(height: 8.h),
+              Row(
+                children: methods
+                    .where((m) => m != _method1)
+                    .map(
+                      (m) => Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4.w),
+                          child: ElevatedButton(
+                            onPressed: () => setState(() => _method2 = m),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _method2 == m
+                                  ? Colors.purple.shade50
+                                  : Colors.grey.shade50,
+                              foregroundColor: _method2 == m
+                                  ? Colors.purple
+                                  : Colors.grey,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12.r),
+                                side: BorderSide(
+                                  color: _method2 == m
+                                      ? Colors.purple.shade200
+                                      : Colors.transparent,
+                                ),
+                              ),
+                            ),
+                            child: Text(
+                              m,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 10.sp,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+              SizedBox(height: 24.h),
+
+              if (isValid)
+                Container(
+                  padding: EdgeInsets.all(16.r),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(16.r),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            _method1,
+                            style: TextStyle(
+                              fontSize: 10.sp,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.grey,
+                            ),
+                          ),
+                          Text(
+                            '₹$amt1',
+                            style: TextStyle(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 8.h),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            _method2,
+                            style: TextStyle(
+                              fontSize: 10.sp,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.grey,
+                            ),
+                          ),
+                          Text(
+                            '₹$amt2',
+                            style: TextStyle(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Divider(height: 24.h),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'TOTAL',
+                            style: TextStyle(
+                              fontSize: 10.sp,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.green,
+                            ),
+                          ),
+                          Text(
+                            '₹$orderTotal ✓',
+                            style: TextStyle(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.green,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              SizedBox(height: 24.h),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: widget.onCancel,
+                      child: Text(
+                        'CANCEL',
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11.sp,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: (!isValid || widget.isLoading)
+                          ? null
+                          : () {
+                              widget.onConfirm([
+                                {'method': _method1, 'amount': amt1},
+                                {'method': _method2, 'amount': amt2},
+                              ]);
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 20.h),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16.r),
+                        ),
+                      ),
+                      child: Text(
+                        widget.isLoading ? 'PROCESSING...' : 'CONFIRM SPLIT',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11.sp,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
