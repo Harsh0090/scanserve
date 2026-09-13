@@ -9,6 +9,7 @@ import '../../../utils/apiClient.dart';
 import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import '../../components/MenuModal.dart';
+import '../../../services/kot_print_service.dart';
 
 class OrdersPage extends ConsumerStatefulWidget {
   const OrdersPage({super.key});
@@ -22,10 +23,28 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   List<dynamic> _orders = [];
   List<dynamic> _servedOrders = [];
   List<dynamic> _payLaterOrders = [];
-  String _activeFilter = 'LIVE';
+  String _activeFilter = 'All';
   String _searchQuery = '';
   bool _isLoading = false;
-  // Removed local _businessTypeFoodTruck to use reactive authState
+
+  // SERVED period filter
+  String _servedDateFilter = 'all';
+  String _customStart = '';
+  String _customEnd = '';
+
+  // Track newly added items for "New" badge
+  final Map<String, List<String>> _newlyAddedItems = {};
+
+  // Pay Later partial amounts and state
+  final Map<String, TextEditingController> _partialAmounts = {};
+  String? _partialCollectingCustomer;
+
+  TextEditingController _getPartialController(String customerName) {
+    if (!_partialAmounts.containsKey(customerName)) {
+      _partialAmounts[customerName] = TextEditingController();
+    }
+    return _partialAmounts[customerName]!;
+  }
 
   // Modals & States
   dynamic _viewDetails;
@@ -41,6 +60,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   String? _paymentUpdating;
   Map<String, dynamic>? _appendTarget;
   final Set<String> _pendingCheckoutIds = {};
+  final Set<String> _processedEvents = {};
+  final Set<String> _shownPromptKeys = {};
 
   IO.Socket? _socket;
 
@@ -59,6 +80,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   void dispose() {
     _socket?.disconnect();
     _socket?.dispose();
+    for (var ctrl in _partialAmounts.values) {
+      ctrl.dispose();
+    }
     super.dispose();
   }
 
@@ -78,7 +102,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       return;
     }
 
-    // Removed local _businessTypeFoodTruck setter
+    if (mounted) {
+      setState(() {
+        _activeFilter = 'All';
+      });
+    }
 
     _setupSocket(restaurantId);
     await _fetchOrders();
@@ -110,16 +138,38 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       final newOrder = (data is List && data.isNotEmpty) ? data[0] : data;
       if (newOrder is! Map) return;
 
+      final orderId = newOrder['_id']?.toString() ?? '';
+      final eventKey = "$orderId-${newOrder['type'] ?? 'base'}-${newOrder['updatedAt'] ?? newOrder['createdAt']}";
+
+      // Socket event deduplication with 10s auto-cleanup
+      if (_processedEvents.contains(eventKey)) return;
+      _processedEvents.add(eventKey);
+      Future.delayed(const Duration(seconds: 10), () => _processedEvents.remove(eventKey));
+
+      final user = ref.read(authProvider).user;
+      final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+      final bool liveOrderKOT = userData['liveOrderKOT'] == true;
+      final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+
       setState(() {
-        final orderId = newOrder['_id'];
-        final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId.toString());
+        final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId);
         if (idx != -1) {
           if (newOrder['type'] == 'ITEM_ADDED') {
             final newItems = newOrder['newItems'];
             if (newItems is List && newItems.isNotEmpty) {
-              final autoPrintKOT =
-                  ref.read(authProvider).user?['autoPrintKOT'] == true;
-              if (autoPrintKOT) {
+              final newIds = newItems
+                  .map((i) => (i is Map ? (i['item'] is Map ? i['item']['_id'] : i['item']) : i).toString())
+                  .toList();
+              _newlyAddedItems[orderId] = [
+                ...(_newlyAddedItems[orderId] ?? []),
+                ...newIds,
+              ];
+
+              // TRIGGER 2: Add-on items added to existing order
+              // if user.autoPrintKOT == true AND user.liveOrderKOT == false:
+              //     showKOTPrompt(order: existingOrder, items: socketData.newItems, isAddOn: true)
+              // Note: when liveOrderKOT is true, backend handles this automatically
+              if (autoPrintKOT && !liveOrderKOT) {
                 _showKOTToast(_orders[idx], newItems, true);
               }
             }
@@ -130,16 +180,26 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   newOrder['estimatedTotal'] ?? _orders[idx]['estimatedTotal'],
               'subTotal': newOrder['subTotal'] ?? _orders[idx]['subTotal'],
               'updatedAt': newOrder['updatedAt'],
+              if (newOrder['lastAddedItems'] != null)
+                'lastAddedItems': newOrder['lastAddedItems'],
             };
           } else {
             _orders[idx] = {..._orders[idx] as Map, ...newOrder};
           }
         } else {
+          // TRIGGER 1: New order arrives via socket (not already in local list)
           final status = newOrder['status'];
-          if ((status == 'SERVED' || status == 'CANCELLED') && !_pendingCheckoutIds.contains(orderId.toString())) {
+          if ((status == 'SERVED' || status == 'CANCELLED') && !_pendingCheckoutIds.contains(orderId)) {
             return;
           }
-          _showKOTToast(newOrder, newOrder['items'] ?? [], false);
+
+          final items = (newOrder['items'] is List) ? List<dynamic>.from(newOrder['items']) : <dynamic>[];
+          if (liveOrderKOT) {
+            _silentPrintKOT(newOrder, items, false);
+          } else if (autoPrintKOT) {
+            _showKOTToast(newOrder, items, false);
+          }
+
           _orders.insert(0, newOrder);
         }
       });
@@ -165,14 +225,22 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
   void _showKOTToast(dynamic order, List<dynamic> itemsToShow, bool isAddOn) {
     if (!mounted) return;
+    // Step 1: Filter out skipKitchen items
     final kitchenItems = itemsToShow
         .where((i) => i is Map && i['skipKitchen'] != true)
         .toList();
-    if (kitchenItems.isEmpty) return;
+    if (kitchenItems.isEmpty) return; // Nothing to print
+
+    final orderId = order['_id']?.toString() ?? '';
+    final promptKey = "kot-$orderId-${isAddOn ? 'addon' : 'new'}-${kitchenItems.length}";
+    if (_shownPromptKeys.contains(promptKey)) return;
+    _shownPromptKeys.add(promptKey);
+    Future.delayed(const Duration(seconds: 15), () => _shownPromptKeys.remove(promptKey));
 
     final title = isAddOn ? "Add-on Order" : "New Order";
     final table = order['tableNumber'] ?? order['customerName'] ?? "NA";
 
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -184,12 +252,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '$title - $table',
+                    '$title — Table $table',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   Text(
                     '${kitchenItems.length} items to print',
-                    style: const TextStyle(fontSize: 10),
+                    style: const TextStyle(fontSize: 11),
                   ),
                 ],
               ),
@@ -200,7 +268,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           label: 'PRINT KOT',
           textColor: Colors.orange,
           onPressed: () {
-            // printKOT logic here
+            // TRIGGER 4: User taps "PRINT KOT" button
             _printKOT(order, itemsToShow, isAddOn);
           },
         ),
@@ -210,8 +278,65 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     );
   }
 
-  void _printKOT(dynamic order, List<dynamic> itemsToShow, bool isAddOn) {
-    debugPrint("Print KOT logic placeholder for order: ${order['_id']}");
+  Future<void> _silentPrintKOT(dynamic order, List<dynamic> items, bool isAddOn) async {
+    try {
+      final orderId = (order is Map ? order['_id'] : order)?.toString() ?? '';
+      final tableNumber = (order is Map ? order['tableNumber'] ?? order['tableName'] : null)?.toString();
+      final customerName = (order is Map ? order['customerName'] : null)?.toString();
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(
+        orderId: orderId,
+        items: items,
+        isAddOn: isAddOn,
+        tableNumber: tableNumber,
+        customerName: customerName,
+        restaurantName: restName?.toString(),
+      );
+    } catch (e) {
+      debugPrint("❌ Silent KOT print failed: $e");
+    }
+  }
+
+  Future<void> _printKOT(dynamic order, List<dynamic> itemsToShow, bool isAddOn) async {
+    try {
+      final orderId = (order is Map ? order['_id'] : order)?.toString() ?? '';
+      final tableNumber = (order is Map ? order['tableNumber'] ?? order['tableName'] : null)?.toString();
+      final customerName = (order is Map ? order['customerName'] : null)?.toString();
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(
+        orderId: orderId,
+        items: itemsToShow,
+        isAddOn: isAddOn,
+        tableNumber: tableNumber,
+        customerName: customerName,
+        restaurantName: restName?.toString(),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('KOT sent to printer ✓'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('KOT Print Failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _fetchOrders() async {
@@ -244,10 +369,20 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     }
   }
 
-  Future<void> _fetchServedOrders() async {
+  Future<void> _fetchServedOrders([String dateFilter = 'all', String? start, String? end]) async {
     setState(() => _isLoading = true);
     try {
-      final data = await apiFetch('/api/orders/served');
+      String url = '/api/orders/served';
+      final List<String> params = [];
+      if (dateFilter != 'all') params.add('dateFilter=$dateFilter');
+      if (dateFilter == 'custom' && start != null && end != null && start.isNotEmpty && end.isNotEmpty) {
+        params.add('startDate=$start');
+        params.add('endDate=$end');
+      }
+      if (params.isNotEmpty) {
+        url += '?${params.join('&')}';
+      }
+      final data = await apiFetch(url);
       if (mounted && data is Map && data['orders'] != null) {
         setState(
           () => _servedOrders = data['orders'] is List ? data['orders'] : [],
@@ -503,23 +638,32 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
   void _onFilterChanged(String filter) {
     setState(() => _activeFilter = filter);
-    if (filter == 'SERVED' && _servedOrders.isEmpty) {
-      _fetchServedOrders();
-    } else if (filter == 'PAY_LATER' && _payLaterOrders.isEmpty) {
+    if (filter == 'SERVED') {
+      _fetchServedOrders(
+        _servedDateFilter,
+        _customStart.isNotEmpty ? _customStart : null,
+        _customEnd.isNotEmpty ? _customEnd : null,
+      );
+    } else if (filter == 'PAY_LATER') {
       _fetchPayLaterOrders();
     }
   }
 
   Future<void> _cancelOrder(String orderId) async {
+    final isArchived = _payLaterOrders.any((o) => o is Map && o['_id']?.toString() == orderId) ||
+        _servedOrders.any((o) => o is Map && o['_id']?.toString() == orderId);
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(
-          'Are you sure?',
+          isArchived ? 'Delete this order?' : 'Cancel Order?',
           style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18.sp),
         ),
         content: Text(
-          "You won't be able to revert this cancellation!",
+          isArchived
+              ? "This order will be removed from sales records permanently."
+              : "This action cannot be undone.",
           style: TextStyle(fontSize: 14.sp),
         ),
         shape: RoundedRectangleBorder(
@@ -529,7 +673,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text(
-              'No, keep it',
+              isArchived ? 'Keep Order' : 'No, keep it',
               style: TextStyle(
                 color: Colors.grey,
                 fontWeight: FontWeight.bold,
@@ -540,7 +684,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0F172A),
+              backgroundColor: const Color(0xFFEF4444),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16.r),
@@ -548,7 +692,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
             ),
             child: Text(
-              'Yes, cancel it!',
+              isArchived ? 'Yes, Delete' : 'Yes, cancel it!',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.sp),
             ),
           ),
@@ -562,11 +706,16 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       await apiFetch('/api/admin/orders/$orderId/cancel', method: 'PATCH');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Order Cancelled!'),
+          SnackBar(
+            content: Text(isArchived ? 'Order deleted!' : 'Order Cancelled!'),
             backgroundColor: Colors.green,
           ),
         );
+        setState(() {
+          _orders.removeWhere((o) => o is Map && o['_id']?.toString() == orderId);
+          _servedOrders.removeWhere((o) => o is Map && o['_id']?.toString() == orderId);
+          _payLaterOrders.removeWhere((o) => o is Map && o['_id']?.toString() == orderId);
+        });
       }
       _fetchOrders();
     } catch (e) {
@@ -644,12 +793,38 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   Future<void> _updateStatus(dynamic order, String nextStatus) async {
     try {
       setState(() => _statusUpdating = order['_id']);
-      await apiFetch(
+      final result = await apiFetch(
         '/api/admin/orders/${order['_id']}/status',
         method: 'PATCH',
         data: {'status': nextStatus},
       );
-      if (nextStatus == 'SERVED') {
+      if (mounted) {
+        setState(() {
+          _newlyAddedItems.remove(order['_id']?.toString());
+        });
+      }
+      if (nextStatus == 'ACCEPTED') {
+        // TRIGGER 3: Admin Accepts Order (Status -> ACCEPTED)
+        final updatedOrder = (result is Map && result['order'] != null)
+            ? result['order']
+            : (result is Map ? result : order);
+        final user = ref.read(authProvider).user;
+        final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+        final bool liveOrderKOT = userData['liveOrderKOT'] == true;
+        final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+
+        final items = (updatedOrder['items'] is List)
+            ? List<dynamic>.from(updatedOrder['items'])
+            : ((order is Map && order['items'] is List)
+                ? List<dynamic>.from(order['items'])
+                : <dynamic>[]);
+
+        if (liveOrderKOT) {
+          _silentPrintKOT(updatedOrder, items, false);
+        } else if (autoPrintKOT) {
+          _showKOTToast(updatedOrder, items, false);
+        }
+      } else if (nextStatus == 'SERVED') {
         _printOrderBill(order);
         setState(() {
           _pendingCheckoutIds.remove(order['_id'].toString());
@@ -693,6 +868,147 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         );
       }
     }
+  }
+
+  List<Map<String, dynamic>> _getGroupedPayLaterOrders() {
+    final Map<String, Map<String, dynamic>> groups = {};
+    for (var order in _payLaterOrders) {
+      if (order is! Map) continue;
+      final rawName = (order['customerName'] ?? 'Guest').toString();
+      final key = rawName.trim().toLowerCase();
+
+      if (!groups.containsKey(key)) {
+        groups[key] = {
+          'customerName': rawName.trim(),
+          'orders': <dynamic>[],
+          'totalOwed': 0.0,
+          'totalPaid': 0.0,
+          'totalBill': 0.0,
+        };
+      }
+
+      double orderTotal = 0.0;
+      final items = order['items'];
+      if (items is List) {
+        for (var i in items) {
+          if (i is! Map) continue;
+          final itemData = i['item'];
+          final price = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? i['basePrice'] ?? 0).toString()) ?? 0;
+          final qty = num.tryParse((i['quantity'] ?? 1).toString()) ?? 1;
+          orderTotal += (price * qty);
+        }
+      }
+
+      final partialPayment = order['partialPayment'];
+      final num paidNow = (partialPayment is Map && partialPayment['paidNow'] != null)
+          ? (num.tryParse(partialPayment['paidNow'].toString()) ?? 0)
+          : 0;
+      final bool hasPartial = paidNow > 0;
+      final double owedForThisOrder = hasPartial
+          ? (num.tryParse((partialPayment['remaining'] ?? orderTotal).toString())?.toDouble() ?? orderTotal)
+          : orderTotal;
+      final double paidForThisOrder = hasPartial ? paidNow.toDouble() : 0.0;
+
+      (groups[key]!['orders'] as List<dynamic>).add({
+        ...order,
+        'orderTotal': orderTotal,
+      });
+      groups[key]!['totalBill'] = (groups[key]!['totalBill'] as double) + orderTotal;
+      groups[key]!['totalPaid'] = (groups[key]!['totalPaid'] as double) + paidForThisOrder;
+      groups[key]!['totalOwed'] = (groups[key]!['totalOwed'] as double) + owedForThisOrder;
+    }
+
+    final list = groups.values.toList();
+    for (var g in list) {
+      final ords = g['orders'] as List<dynamic>;
+      ords.sort((a, b) {
+        final dateA = DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final dateB = DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return dateB.compareTo(dateA);
+      });
+    }
+
+    if (_searchQuery.trim().isNotEmpty) {
+      final q = _searchQuery.trim().toLowerCase();
+      return list.where((g) {
+        final name = (g['customerName'] ?? '').toString().toLowerCase();
+        if (name.contains(q)) return true;
+        final ords = g['orders'] as List<dynamic>;
+        return ords.any((o) {
+          final id = (o['_id'] ?? '').toString().toLowerCase();
+          return id.length >= 4 && id.substring(id.length - 4).contains(q);
+        });
+      }).toList();
+    }
+
+    return list;
+  }
+
+  Future<void> _handleCollectPartialPayLater(Map<String, dynamic> group, String method) async {
+    final customerName = group['customerName']?.toString() ?? '';
+    final ctrl = _getPartialController(customerName);
+    final amount = num.tryParse(ctrl.text.trim()) ?? 0;
+    final double totalOwed = (group['totalOwed'] as num?)?.toDouble() ?? 0.0;
+
+    if (amount <= 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter a valid amount'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+    if (amount > totalOwed) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Amount cannot exceed ₹${totalOwed.toInt()} owed'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+
+    try {
+      setState(() => _partialCollectingCustomer = customerName);
+      await apiFetch(
+        '/api/admin/orders/pay-later/collect-partial',
+        method: 'PATCH',
+        data: {
+          'customerName': customerName,
+          'amount': amount,
+          'paymentMethod': method,
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('₹$amount collected via $method ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+      ctrl.clear();
+      await _fetchPayLaterOrders();
+      await _fetchOrders();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to collect partial payment: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _partialCollectingCustomer = null);
+    }
+  }
+
+  Future<void> _handleSettleAllPayLater(Map<String, dynamic> group, String method) async {
+    final orders = List<dynamic>.from(group['orders'] ?? []);
+    for (var order in orders) {
+      if (order is Map) {
+        await _clearPayLaterPayment(order, method);
+      }
+    }
+    await _fetchPayLaterOrders();
+    await _fetchOrders();
   }
 
   List<Map<String, dynamic>> _getTopSelling() {
@@ -776,9 +1092,610 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     );
   }
 
-  Widget _buildOrderCard(BuildContext context, dynamic order, bool isFoodTruck, dynamic authState) {
-    final status = order['status']?.toString() ?? 'NEW';
-    final isRestaurant = authState.user?['businessType'] == "RESTAURANT" || authState.user?['data']?['businessType'] == "RESTAURANT";
+  String _formatTime(dynamic dateStr) {
+    if (dateStr == null) return '';
+    final dt = DateTime.tryParse(dateStr.toString())?.toLocal();
+    if (dt == null) return '';
+    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final amPm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $amPm';
+  }
+
+  String _formatDateTime(dynamic dateStr) {
+    if (dateStr == null) return '';
+    final dt = DateTime.tryParse(dateStr.toString())?.toLocal();
+    if (dt == null) return '';
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEPT', 'OCT', 'NOV', 'DEC'];
+    final day = dt.day.toString().padLeft(2, '0');
+    final month = months[dt.month - 1];
+    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final amPm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$day $month • $hour:$minute $amPm';
+  }
+
+  Widget _buildStatusBadge(String status) {
+    Color bg;
+    Color border;
+    Color text;
+    String label;
+
+    switch (status) {
+      case 'NEW':
+        bg = const Color(0xFFEFF6FF);
+        border = const Color(0xFFBFDBFE);
+        text = const Color(0xFF2563EB);
+        label = 'NEW';
+        break;
+      case 'ACCEPTED':
+        bg = const Color(0xFFEEF2FF);
+        border = const Color(0xFFC7D2FE);
+        text = const Color(0xFF4F46E5);
+        label = 'ACCEPTED';
+        break;
+      case 'PREPARING':
+        bg = const Color(0xFFFFF7ED);
+        border = const Color(0xFFFED7AA);
+        text = const Color(0xFFEA580C);
+        label = 'COOKING';
+        break;
+      case 'READY':
+        bg = const Color(0xFFFAF5FF);
+        border = const Color(0xFFE9D5FF);
+        text = const Color(0xFF9333EA);
+        label = 'READY';
+        break;
+      case 'SERVED':
+        bg = const Color(0xFFF0FDF4);
+        border = const Color(0xFFDCFCE7);
+        text = const Color(0xFF16A34A);
+        label = 'SERVED';
+        break;
+      default:
+        bg = const Color(0xFFEFF6FF);
+        border = const Color(0xFFBFDBFE);
+        text = const Color(0xFF2563EB);
+        label = status;
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12.r),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(LucideIcons.checkCircle2, size: 10.sp, color: text),
+          SizedBox(width: 4.w),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 8.5.sp,
+              fontWeight: FontWeight.w900,
+              color: text,
+              letterSpacing: 0.5.w,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOrderItemRow(dynamic order, dynamic item, bool isPayLaterOrder) {
+    if (item is! Map) return const SizedBox.shrink();
+    final itemData = item['item'];
+    final itemName = (itemData is Map ? itemData['branchName'] : null) ?? item['name'] ?? '';
+    final itemPrice = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? item['basePrice'] ?? 0).toString()) ?? 0;
+    final qty = num.tryParse((item['quantity'] ?? 1).toString()) ?? 1;
+    final price = itemPrice * qty;
+
+    final orderId = order['_id']?.toString() ?? '';
+    final itemId = (itemData is Map ? itemData['_id'] : item['_id'])?.toString();
+    final isNewItem = _newlyAddedItems[orderId]?.contains(itemId) == true;
+
+    final canRemove = order['status'] != 'SERVED' &&
+        order['status'] != 'CANCELLED' &&
+        order['paymentStatus'] != 'PAID' &&
+        !isPayLaterOrder &&
+        _activeFilter != 'SERVED';
+
+    return Row(
+      children: [
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6.r),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Text(
+            '${qty}x',
+            style: TextStyle(
+              fontSize: 10.sp,
+              fontWeight: FontWeight.w900,
+              color: const Color(0xFF0F172A),
+            ),
+          ),
+        ),
+        SizedBox(width: 8.w),
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  itemName.toString().toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10.5.sp,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF334155),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isNewItem) ...[
+                SizedBox(width: 4.w),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 1.h),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981),
+                    borderRadius: BorderRadius.circular(10.r),
+                  ),
+                  child: Text(
+                    'NEW',
+                    style: TextStyle(
+                      fontSize: 7.sp,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Text(
+          '₹${price.toInt()}',
+          style: TextStyle(
+            fontSize: 10.5.sp,
+            fontWeight: FontWeight.bold,
+            color: const Color(0xFF94A3B8),
+          ),
+        ),
+        if (canRemove) ...[
+          SizedBox(width: 6.w),
+          InkWell(
+            onTap: () {
+              _removeItemFromOrder(order['_id'].toString(), item['_id'].toString()).then((res) {
+                setState(() {
+                  final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
+                  final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == order['_id'].toString());
+                  if (idx != -1) {
+                    if (res is Map && res['cancelled'] == true) {
+                      _orders.removeAt(idx);
+                    } else {
+                      _orders[idx] = {
+                        ..._orders[idx] as Map,
+                        'items': updatedOrder['items'],
+                        'estimatedTotal': updatedOrder['estimatedTotal'],
+                        'subTotal': updatedOrder['subTotal'],
+                      };
+                    }
+                  }
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Item removed')),
+                  );
+                }
+              }).catchError((err) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed: $err')),
+                  );
+                }
+              });
+            },
+            borderRadius: BorderRadius.circular(10.r),
+            child: Container(
+              width: 16.r,
+              height: 16.r,
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                LucideIcons.x,
+                size: 9.sp,
+                color: Colors.red.shade400,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCardActionButtons(
+    dynamic order,
+    String status,
+    bool isReady,
+    bool isFullyServed,
+    bool isPayLaterOrder,
+    bool isRestaurant,
+  ) {
+    if (isReady && !isPayLaterOrder && _activeFilter != 'SERVED') {
+      return Column(
+        children: [
+          Row(
+            children: [
+              _buildPaymentButton(
+                icon: Icons.payments_outlined,
+                label: 'CASH',
+                onPressed: () => isRestaurant
+                    ? _handleCollectAndServe(order, 'CASH')
+                    : _handleCollectEarly(order, 'CASH'),
+                isLoading: _paymentUpdating == '${order['_id']}-CASH',
+              ),
+              SizedBox(width: 6.w),
+              _buildPaymentButton(
+                icon: Icons.qr_code_scanner,
+                label: 'UPI',
+                onPressed: () => isRestaurant
+                    ? _handleCollectAndServe(order, 'UPI')
+                    : _handleCollectEarly(order, 'UPI'),
+                isLoading: _paymentUpdating == '${order['_id']}-UPI',
+              ),
+              SizedBox(width: 6.w),
+              _buildPaymentButton(
+                icon: Icons.credit_card,
+                label: 'CARD',
+                onPressed: () => isRestaurant
+                    ? _handleCollectAndServe(order, 'CARD')
+                    : _handleCollectEarly(order, 'CARD'),
+                isLoading: _paymentUpdating == '${order['_id']}-CARD',
+              ),
+            ],
+          ),
+          SizedBox(height: 6.h),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _initiatePayLater(order),
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFFBEB),
+                    foregroundColor: const Color(0xFFD97706),
+                    side: const BorderSide(color: Color(0xFFFDE68A)),
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10.r),
+                    ),
+                  ),
+                  child: Text(
+                    _payLaterUpdating == order['_id'] ? '...' : 'Pay Later',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 10.sp,
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 6.w),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => setState(() => _splitTarget = order),
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFAF5FF),
+                    foregroundColor: const Color(0xFF9333EA),
+                    side: const BorderSide(color: Color(0xFFE9D5FF)),
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10.r),
+                    ),
+                  ),
+                  child: Text(
+                    'Split',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 10.sp,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    if (!isReady && !isFullyServed && !isPayLaterOrder && _activeFilter != 'SERVED') {
+      final String nextStatus = status == 'NEW'
+          ? 'ACCEPTED'
+          : status == 'ACCEPTED'
+              ? 'PREPARING'
+              : 'READY';
+      final String buttonText = status == 'NEW'
+          ? 'ACCEPT'
+          : status == 'ACCEPTED'
+              ? 'COOKING'
+              : 'READY';
+      final Color buttonBg = status == 'ACCEPTED'
+          ? const Color(0xFFF97316)
+          : const Color(0xFF0F172A);
+
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: _statusUpdating == order['_id']
+              ? null
+              : () => _updateStatus(order, nextStatus),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: buttonBg,
+            foregroundColor: Colors.white,
+            padding: EdgeInsets.symmetric(vertical: 14.h),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14.r),
+            ),
+            elevation: 0,
+          ),
+          child: Text(
+            _statusUpdating == order['_id'] ? '...' : buttonText,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 11.sp,
+              letterSpacing: 1.w,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (isFullyServed) {
+      return Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF0FDF4),
+          borderRadius: BorderRadius.circular(12.r),
+          border: Border.all(color: const Color(0xFFDCFCE7)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '✓ SERVED & PAID',
+                    style: TextStyle(
+                      fontSize: 10.sp,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF16A34A),
+                      letterSpacing: 1.w,
+                    ),
+                  ),
+                  if (order['paymentMethod'] != null && order['paymentMethod'].toString().isNotEmpty)
+                    Text(
+                      'via ${order['paymentMethod']}',
+                      style: TextStyle(
+                        fontSize: 8.5.sp,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF4ADE80),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: Icon(LucideIcons.printer, size: 16.sp, color: const Color(0xFF16A34A)),
+              onPressed: () => _printOrderBill(order),
+              tooltip: 'Reprint Bill',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (isPayLaterOrder) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'COLLECT PAYMENT',
+            style: TextStyle(
+              fontSize: 8.sp,
+              fontWeight: FontWeight.w900,
+              color: const Color(0xFFD97706),
+              letterSpacing: 1.w,
+            ),
+          ),
+          SizedBox(height: 6.h),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => _clearPayLaterPayment(order, 'CASH'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.shade50,
+                    foregroundColor: Colors.amber.shade700,
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10.r),
+                      side: BorderSide(color: Colors.amber.shade200),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    _paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9.sp),
+                  ),
+                ),
+              ),
+              SizedBox(width: 6.w),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => _clearPayLaterPayment(order, 'UPI'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.shade50,
+                    foregroundColor: Colors.amber.shade700,
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10.r),
+                      side: BorderSide(color: Colors.amber.shade200),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    _paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9.sp),
+                  ),
+                ),
+              ),
+              SizedBox(width: 6.w),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => _clearPayLaterPayment(order, 'CARD'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.shade50,
+                    foregroundColor: Colors.amber.shade700,
+                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10.r),
+                      side: BorderSide(color: Colors.amber.shade200),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    _paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9.sp),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildServedDateFilterBar() {
+    final dateOptions = [
+      {'key': 'all', 'label': 'All Time'},
+      {'key': 'today', 'label': 'Today'},
+      {'key': 'yesterday', 'label': 'Yesterday'},
+      {'key': 'week', 'label': 'This Week'},
+      {'key': 'custom', 'label': 'Custom'},
+    ];
+
+    return Container(
+      margin: EdgeInsets.only(bottom: 16.h),
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16.r),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Text(
+              'PERIOD',
+              style: TextStyle(
+                fontSize: 10.sp,
+                fontWeight: FontWeight.w900,
+                color: const Color(0xFF94A3B8),
+                letterSpacing: 1.w,
+              ),
+            ),
+            SizedBox(width: 12.w),
+            ...dateOptions.map((opt) {
+              final isSelected = _servedDateFilter == opt['key'];
+              return Padding(
+                padding: EdgeInsets.only(right: 8.w),
+                child: InkWell(
+                  onTap: () {
+                    setState(() => _servedDateFilter = opt['key']!);
+                    if (opt['key'] != 'custom') {
+                      _fetchServedOrders(opt['key']!);
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(20.r),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
+                    decoration: BoxDecoration(
+                      color: isSelected ? const Color(0xFF0F172A) : Colors.white,
+                      borderRadius: BorderRadius.circular(20.r),
+                      border: Border.all(
+                        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFFE2E8F0),
+                      ),
+                    ),
+                    child: Text(
+                      opt['label']!,
+                      style: TextStyle(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.bold,
+                        color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
+            if (_servedDateFilter == 'custom') ...[
+              SizedBox(width: 8.w),
+              OutlinedButton(
+                onPressed: () async {
+                  final now = DateTime.now();
+                  final picked = await showDateRangePicker(
+                    context: context,
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime(now.year + 1),
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      _customStart = picked.start.toIso8601String().substring(0, 10);
+                      _customEnd = picked.end.toIso8601String().substring(0, 10);
+                    });
+                    _fetchServedOrders('custom', _customStart, _customEnd);
+                  }
+                },
+                style: OutlinedButton.styleFrom(
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12.r),
+                  ),
+                ),
+                child: Text(
+                  _customStart.isNotEmpty && _customEnd.isNotEmpty
+                      ? '$_customStart to $_customEnd'
+                      : 'Pick Dates',
+                  style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.bold, color: const Color(0xFF0F172A)),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOrderCard(BuildContext context, dynamic order, dynamic authState) {
+    final status = (order['status']?.toString() ?? 'NEW').toUpperCase();
+    const isRestaurant = true;
+    final isPayLaterOrder = order['paymentStatus'] == 'PAY_LATER';
+    final isReady = status == 'READY';
+    final isFullyServed = status == 'SERVED' && !isPayLaterOrder;
 
     double total = 0;
     final items = order['items'] ?? [];
@@ -786,195 +1703,183 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       for (var i in items) {
         if (i is! Map) continue;
         final itemData = i['item'];
-        final price =
-            num.tryParse(
-              ((itemData is Map
-                          ? itemData['branchPrice']
-                          : null) ??
-                      i['basePrice'] ??
-                      0)
-                  .toString(),
-            ) ??
-            0;
-        final qty =
-            num.tryParse(
-              (i['quantity'] ?? 1).toString(),
-            ) ??
-            1;
+        final price = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? i['basePrice'] ?? 0).toString()) ?? 0;
+        final qty = num.tryParse((i['quantity'] ?? 1).toString()) ?? 1;
         total += (price * qty);
       }
     }
-    final isPending = order['paymentStatus'] == 'PENDING';
+
+    final Color stripeColor = status == 'NEW'
+        ? const Color(0xFF60A5FA)
+        : status == 'ACCEPTED'
+            ? const Color(0xFF818CF8)
+            : status == 'PREPARING'
+                ? const Color(0xFFFB923C)
+                : status == 'READY'
+                    ? const Color(0xFFC084FC)
+                    : const Color(0xFF4ADE80);
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(40.r),
+        borderRadius: BorderRadius.circular(20.r),
         border: Border.all(
-          color: const Color(0xFFF1F5F9), // border-slate-100
+          color: isPayLaterOrder ? Colors.amber.shade200 : const Color(0xFFE2E8F0),
+          width: 1.r,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withAlpha(5),
+            color: Colors.black.withAlpha(8),
             blurRadius: 10.r,
             offset: Offset(0, 4.h),
           ),
         ],
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Card Header
+          // 1. Top Stripe Bar (4px height)
+          Container(
+            height: 4.h,
+            width: double.infinity,
+            color: stripeColor,
+          ),
+
+          // 2. Card Header
           Padding(
-            padding: EdgeInsets.all(24.0.r),
+            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Top Row: Time and Table Shift Icon
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Row(
                       children: [
-                        Icon(
-                          Icons.access_time,
-                          size: 14.sp,
-                          color: Colors.grey.shade500,
+                        _buildStatusBadge(status),
+                        if (isPayLaterOrder) ...[
+                          SizedBox(width: 6.w),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFFBEB),
+                              borderRadius: BorderRadius.circular(12.r),
+                              border: Border.all(color: const Color(0xFFFDE68A)),
+                            ),
+                            child: Text(
+                              'PAY LATER',
+                              style: TextStyle(
+                                fontSize: 8.sp,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFFD97706),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        InkWell(
+                          onTap: () => setState(() => _viewDetails = order),
+                          borderRadius: BorderRadius.circular(8.r),
+                          child: Padding(
+                            padding: EdgeInsets.all(4.r),
+                            child: Icon(
+                              LucideIcons.user,
+                              size: 15.sp,
+                              color: const Color(0xFF94A3B8),
+                            ),
+                          ),
                         ),
-                        SizedBox(width: 6.w),
-                        Text(
-                          DateTime.tryParse(order['createdAt'] ?? '')
-                                  ?.toLocal()
-                                  .toString()
-                                  .substring(11, 16) ??
-                              'Time',
-                          style: TextStyle(
-                            fontSize: 12.sp,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey.shade500,
+                        if (!isFullyServed && !isPayLaterOrder && _activeFilter != 'SERVED') ...[
+                          SizedBox(width: 4.w),
+                          InkWell(
+                            onTap: () => setState(() {
+                              _shiftingOrder = order;
+                              _newTableValue = order['tableNumber']?.toString() ?? '';
+                            }),
+                            borderRadius: BorderRadius.circular(8.r),
+                            child: Padding(
+                              padding: EdgeInsets.all(4.r),
+                              child: Icon(
+                                LucideIcons.moveRight,
+                                size: 15.sp,
+                                color: const Color(0xFF94A3B8),
+                              ),
+                            ),
+                          ),
+                        ],
+                        SizedBox(width: 4.w),
+                        InkWell(
+                          onTap: () => _cancelOrder(order['_id'].toString()),
+                          borderRadius: BorderRadius.circular(8.r),
+                          child: Padding(
+                            padding: EdgeInsets.all(4.r),
+                            child: Icon(
+                              LucideIcons.trash2,
+                              size: 15.sp,
+                              color: const Color(0xFF94A3B8),
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    if (!isFoodTruck && _activeFilter != 'SERVED')
-                      IconButton(
-                        icon: Icon(
-                          LucideIcons.arrowRight,
-                          size: 18.sp,
-                          color: Colors.grey.shade400,
-                        ),
-                        onPressed: () => setState(() {
-                          _shiftingOrder = order;
-                          _newTableValue = order['tableNumber']?.toString() ?? '';
-                        }),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
                   ],
                 ),
                 SizedBox(height: 8.h),
-                // Middle Row: Guest Name / Table Number and View Details Link
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        isFoodTruck
-                            ? (order['customerName']?.toString() ?? 'Walk-in Guest')
-                            : 'Table ${order['tableNumber']?.toString() ?? 'NA'}',
-                        style: TextStyle(
-                          fontSize: 20.sp,
-                          fontWeight: FontWeight.w900,
-                          color: const Color(0xFF0F172A),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                if (!isPayLaterOrder)
+                  RichText(
+                    text: TextSpan(
+                      style: TextStyle(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
                       ),
-                    ),
-                    InkWell(
-                      onTap: () => setState(() => _viewDetails = order),
-                      child: Text(
-                        'View Details',
-                        style: TextStyle(
-                          fontSize: 12.sp,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.grey.shade500,
-                          decoration: TextDecoration.underline,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 4.h),
-                // Bottom Row: Order ID hash and Status Badge
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
                       children: [
-                        Text(
-                          '#${(order['_id']?.toString() ?? '....').substring((order['_id']?.toString() ?? '....').length - 4).toUpperCase()}',
-                          style: TextStyle(
-                            fontSize: 12.sp,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey.shade400,
-                          ),
+                        TextSpan(
+                          text: 'TABLE ${order['tableNumber'] ?? 'NA'}',
                         ),
-                        SizedBox(width: 8.w),
-                        IconButton(
-                          icon: Icon(
-                            LucideIcons.trash2,
-                            size: 16.sp,
-                            color: Colors.red.shade300,
+                        if (order['tableAreaLabel'] != null && order['tableAreaLabel'].toString().isNotEmpty)
+                          TextSpan(
+                            text: ' (${order['tableAreaLabel']})',
+                            style: TextStyle(
+                              fontSize: 11.sp,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF94A3B8),
+                            ),
                           ),
-                          onPressed: () => _cancelOrder(order['_id']),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
                       ],
                     ),
-                    // Status Badge (preserves the Cooking / Ready info dynamically)
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 2.h),
-                      decoration: BoxDecoration(
-                        color: status == 'PREPARING'
-                            ? Colors.orange.shade50
-                            : status == 'ACCEPTED'
-                            ? Colors.blue.shade50
-                            : status == 'READY'
-                            ? Colors.purple.shade50
-                            : status == 'SERVED'
-                            ? Colors.green.shade50
-                            : Colors.blue.shade50,
-                        borderRadius: BorderRadius.circular(12.r),
-                        border: Border.all(
-                          color: status == 'PREPARING'
-                              ? Colors.orange.shade100
-                              : status == 'ACCEPTED'
-                              ? Colors.blue.shade200
-                              : status == 'READY'
-                              ? Colors.purple.shade100
-                              : status == 'SERVED'
-                              ? Colors.green.shade100
-                              : Colors.blue.shade100,
-                        ),
-                      ),
-                      child: Text(
-                        status == 'PREPARING' ? 'COOKING' : status,
-                        style: TextStyle(
-                          fontSize: 8.sp,
-                          fontWeight: FontWeight.w900,
-                          color: status == 'PREPARING'
-                              ? Colors.orange
-                              : status == 'ACCEPTED'
-                              ? Colors.blue.shade600
-                              : status == 'READY'
-                              ? Colors.purple
-                              : status == 'SERVED'
-                              ? Colors.green
-                              : Colors.blue,
-                        ),
+                  )
+                else
+                  Text(
+                    (order['customerName'] ?? 'Guest').toString(),
+                    style: TextStyle(
+                      fontSize: 16.sp,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF0F172A),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                SizedBox(height: 4.h),
+                Row(
+                  children: [
+                    Icon(
+                      LucideIcons.clock,
+                      size: 11.sp,
+                      color: const Color(0xFF94A3B8),
+                    ),
+                    SizedBox(width: 4.w),
+                    Text(
+                      _formatTime(order['createdAt']),
+                      style: TextStyle(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF94A3B8),
                       ),
                     ),
                   ],
@@ -983,14 +1888,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             ),
           ),
 
-          // Items List
+          // 3. Items List
           Container(
-            padding: EdgeInsets.symmetric(horizontal: 24.r, vertical: 12.r),
+            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
             decoration: const BoxDecoration(
-              color: Colors.white,
+              color: Color(0xFFF8FAFC),
               border: Border.symmetric(
                 horizontal: BorderSide(
-                  color: Color(0xFFF1F5F9), // border-slate-100
+                  color: Color(0xFFF1F5F9),
                 ),
               ),
             ),
@@ -998,547 +1903,589 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                ListView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(), // remove scrollable
-                  padding: EdgeInsets.zero,
-                  itemCount: (items is List) ? items.length : 0,
-                  itemBuilder: (ctx, iIdx) {
-                    final item = items[iIdx];
-                    if (item is! Map) {
-                      return const SizedBox.shrink();
-                    }
-                    final itemData = item['item'];
-                    final itemName =
-                        (itemData is Map
-                            ? itemData['branchName']
-                            : null) ??
-                        item['name'] ??
-                        '';
-                    final itemPrice =
-                        num.tryParse(
-                          ((itemData is Map
-                                      ? itemData['branchPrice']
-                                      : null) ??
-                                  item['basePrice'] ??
-                                  0)
-                              .toString(),
-                        ) ??
-                        0;
-                    final qty =
-                        num.tryParse(
-                          (item['quantity'] ?? 1)
-                              .toString(),
-                        ) ??
-                        1;
-                    final price = itemPrice * qty;
-
-                    return Padding(
-                      padding: EdgeInsets.only(
-                        bottom: 8.h,
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 10.w,
-                              vertical: 6.h,
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: 150.h),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (items is List)
+                          for (int iIdx = 0; iIdx < items.length; iIdx++) ...[
+                            _buildOrderItemRow(order, items[iIdx], isPayLaterOrder),
+                            if (iIdx < items.length - 1) SizedBox(height: 6.h),
+                          ],
+                      ],
+                    ),
+                  ),
+                ),
+                if (!isFullyServed && !isPayLaterOrder && !isReady && _activeFilter != 'SERVED') ...[
+                  SizedBox(height: 8.h),
+                  CustomPaint(
+                    painter: DashedRectPainter(
+                      color: const Color(0xFFCBD5E1),
+                      strokeWidth: 1.r,
+                      gap: 4.w,
+                      borderRadius: 12.r,
+                    ),
+                    child: InkWell(
+                      onTap: () {
+                        setState(() {
+                          _appendTarget = {
+                            'currentOrderId': order['_id'],
+                            'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}',
+                          };
+                        });
+                        _scaffoldKey.currentState?.openEndDrawer();
+                      },
+                      borderRadius: BorderRadius.circular(12.r),
+                      child: Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.symmetric(vertical: 8.h),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              LucideIcons.plus,
+                              size: 12.sp,
+                              color: const Color(0xFF94A3B8),
                             ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius:
-                                  BorderRadius.circular(
-                                    8.r,
-                                  ),
-                              border: Border.all(
-                                color: Colors.grey.shade200,
-                              ),
-                            ),
-                            child: Text(
-                              '${qty}x',
+                            SizedBox(width: 4.w),
+                            Text(
+                              '+ ADD ITEMS',
                               style: TextStyle(
-                                fontSize: 13.sp,
+                                fontSize: 9.sp,
                                 fontWeight: FontWeight.w900,
+                                color: const Color(0xFF94A3B8),
+                                letterSpacing: 1.w,
                               ),
-                            ),
-                          ),
-                          SizedBox(width: 12.w),
-                          Expanded(
-                            child: Text(
-                              itemName,
-                              style: TextStyle(
-                                fontSize: 16.sp,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            '₹$price',
-                            style: TextStyle(
-                              fontSize: 15.sp,
-                              fontWeight: FontWeight.bold,
-                              color: const Color(0xFF0F172A),
-                            ),
-                          ),
-                          if (_activeFilter != 'SERVED' &&
-                              status != 'READY' &&
-                              status != 'SERVED' &&
-                              (items is List &&
-                                  items.length > 1)) ...[
-                            SizedBox(width: 8.w),
-                            IconButton(
-                              icon: Icon(
-                                Icons.close,
-                                size: 14.sp,
-                                color: Colors.grey.shade400,
-                              ),
-                              onPressed: () {
-                                _removeItemFromOrder(
-                                  order['_id'],
-                                  item['_id'],
-                                ).then((res) {
-                                  setState(() {
-                                    final updatedOrder =
-                                        (res is Map &&
-                                                res['order'] !=
-                                                    null)
-                                            ? res['order']
-                                            : res;
-                                    final idx =
-                                        _orders.indexWhere(
-                                      (o) =>
-                                          o is Map &&
-                                          o['_id'].toString() ==
-                                              order['_id'].toString(),
-                                    );
-                                    if (idx != -1) {
-                                      _orders[idx] = {
-                                        ..._orders[idx]
-                                            as Map,
-                                        'items':
-                                            updatedOrder[
-                                                'items'],
-                                        'estimatedTotal':
-                                            updatedOrder[
-                                                'estimatedTotal'],
-                                        'subTotal':
-                                            updatedOrder[
-                                                'subTotal'],
-                                      };
-                                    }
-                                  });
-                                  ScaffoldMessenger.of(
-                                    context,
-                                  ).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Item removed',
-                                      ),
-                                    ),
-                                  );
-                                }).catchError((err) {
-                                  ScaffoldMessenger.of(
-                                    context,
-                                  ).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Failed: $err',
-                                      ),
-                                    ),
-                                  );
-                                });
-                              },
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
                             ),
                           ],
-                        ],
+                        ),
                       ),
-                    );
-                  },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // 4. Card Footer
+          Padding(
+            padding: EdgeInsets.all(14.r),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'TOTAL',
+                      style: TextStyle(
+                        fontSize: 9.sp,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF94A3B8),
+                        letterSpacing: 2.w,
+                      ),
+                    ),
+                    Text(
+                      '₹${total.toInt()}',
+                      style: TextStyle(
+                        fontSize: 20.sp,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                  ],
                 ),
-                Builder(
-                  builder: (context) {
-                    bool isServed = order['status'] == 'SERVED' && order['paymentStatus'] != 'PAY_LATER';
-                    if (!isServed && order['paymentStatus'] != 'PAY_LATER' && _activeFilter != 'SERVED') {
-                      return Padding(
-                        padding: EdgeInsets.only(top: 12.h),
-                        child: CustomPaint(
-                          painter: DashedRectPainter(
-                            color: Colors.grey.shade300,
-                            gap: 4.w,
-                            borderRadius: 12.r,
+                SizedBox(height: 12.h),
+                _buildCardActionButtons(order, status, isReady, isFullyServed, isPayLaterOrder, isRestaurant),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPayLaterCustomerCard(BuildContext context, Map<String, dynamic> group) {
+    final customerName = (group['customerName'] ?? 'Guest').toString();
+    final double totalBill = (group['totalBill'] as num?)?.toDouble() ?? 0.0;
+    final double totalPaid = (group['totalPaid'] as num?)?.toDouble() ?? 0.0;
+    final double totalOwed = (group['totalOwed'] as num?)?.toDouble() ?? 0.0;
+    final List<dynamic> orders = (group['orders'] is List) ? group['orders'] as List : [];
+    final ctrl = _getPartialController(customerName);
+    final isCollecting = _partialCollectingCustomer == customerName;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24.r),
+        border: Border.all(
+          color: const Color(0xFFFDE68A), // amber-200
+          width: 1.5.r,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(8),
+            blurRadius: 10.r,
+            offset: Offset(0, 4.h),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 1. Header: Avatar + Customer Name + Orders Count + Pay Later Badge
+          Padding(
+            padding: EdgeInsets.all(14.r),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 38.r,
+                      height: 38.r,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFEF3C7), // amber-100
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        customerName.isNotEmpty ? customerName[0].toUpperCase() : 'G',
+                        style: TextStyle(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFFD97706), // amber-600
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 10.w),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          customerName.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 15.sp,
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFF0F172A),
                           ),
-                          child: InkWell(
-                            onTap: () {
-                              setState(() {
-                                _appendTarget = {
-                                  'currentOrderId': order['_id'],
-                                  'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}'
-                                };
-                              });
-                              _scaffoldKey.currentState?.openEndDrawer();
-                            },
-                            borderRadius: BorderRadius.circular(12.r),
-                            child: Container(
-                              width: double.infinity,
-                              padding: EdgeInsets.symmetric(vertical: 12.h),
-                              alignment: Alignment.center,
-                              child: Text(
-                                '+ ADD ITEMS',
-                                style: TextStyle(
-                                  fontSize: 10.sp,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.grey.shade500,
-                                  letterSpacing: 1.w,
-                                ),
-                              ),
-                            ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        SizedBox(height: 2.h),
+                        Text(
+                          '${orders.length} order${orders.length > 1 ? "s" : ""}',
+                          style: TextStyle(
+                            fontSize: 10.sp,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF94A3B8),
                           ),
                         ),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
+                      ],
+                    ),
+                  ],
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 5.h),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB), // amber-50
+                    borderRadius: BorderRadius.circular(20.r),
+                    border: Border.all(color: const Color(0xFFFDE68A)), // amber-200
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        LucideIcons.alertCircle,
+                        size: 11.sp,
+                        color: const Color(0xFFD97706),
+                      ),
+                      SizedBox(width: 4.w),
+                      Text(
+                        'PAY LATER',
+                        style: TextStyle(
+                          fontSize: 8.5.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFFD97706),
+                          letterSpacing: 0.5.w,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
 
-          // Bottom Actions
-          Builder(
-            builder: (context) {
-              bool isPaid = (order['paymentMethod'] != null && order['paymentMethod'].toString().isNotEmpty) ||
-                  _pendingCheckoutIds.contains(order['_id'].toString());
-              bool isServed = order['status'] == 'SERVED' &&
-                  order['paymentStatus'] != 'PAY_LATER' &&
-                  !_pendingCheckoutIds.contains(order['_id'].toString());
-              
-              return Padding(
-                padding: EdgeInsets.all(24.0.r),
+          // 2. Orders list (slate-50 background)
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF8FAFC),
+              border: Border.symmetric(
+                horizontal: BorderSide(color: Color(0xFFF1F5F9)),
+              ),
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: 160.h),
+              child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // TOTAL BILL section
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'TOTAL',
-                          style: TextStyle(
-                            fontSize: 10.sp,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.grey.shade400,
-                            letterSpacing: 2.w,
-                          ),
-                        ),
-                        Text(
-                          '₹$total',
-                          style: TextStyle(
-                            fontSize: 24.sp,
-                            fontWeight: FontWeight.w900,
-                            color: const Color(0xFF0F172A),
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 16.h),
-                    
-                    // PAY_LATER breakdown info (if applicable)
-                    if (order['paymentStatus'] == 'PAY_LATER' && order['paidAmount'] != null && (num.tryParse(order['paidAmount'].toString()) ?? 0) > 0) ...[
-                      Container(
-                        padding: EdgeInsets.all(12.r),
-                        margin: EdgeInsets.only(bottom: 16.h),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(16.r),
-                        ),
-                        child: Column(
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text('PAID NOW', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.green)),
-                                Text('₹${order['paidAmount']}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: Colors.green)),
-                              ],
-                            ),
-                            Divider(height: 16.h, color: Colors.orange.shade200),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text('REMAINING', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
-                                Text('₹${order['remainingAmount']}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                    for (int ordIdx = 0; ordIdx < orders.length; ordIdx++) ...[
+                      Builder(builder: (ctx) {
+                        final order = orders[ordIdx];
+                        final orderId = (order['_id'] ?? '').toString();
+                        final last4 = orderId.length >= 4
+                            ? orderId.substring(orderId.length - 4).toUpperCase()
+                            : orderId.toUpperCase();
+                        final orderItems = (order['items'] is List) ? order['items'] as List : [];
 
-                    // STATE 1: PAY_LATER tab collection
-                    if (_activeFilter == 'PAY_LATER') ...[
-                      Text(
-                        'COLLECT PAYMENT',
-                        style: TextStyle(
-                          fontSize: 9.sp,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.orange.shade600,
-                          letterSpacing: 2.w,
-                        ),
-                      ),
-                      SizedBox(height: 12.h),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => _clearPayLaterPayment(order, 'CASH'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber.shade50,
-                                foregroundColor: Colors.amber.shade700,
-                                padding: EdgeInsets.symmetric(vertical: 14.h),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
-                                elevation: 0,
-                              ),
-                              child: Text(_paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                            ),
-                          ),
-                          SizedBox(width: 8.w),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => _clearPayLaterPayment(order, 'UPI'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber.shade50,
-                                foregroundColor: Colors.amber.shade700,
-                                padding: EdgeInsets.symmetric(vertical: 14.h),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
-                                elevation: 0,
-                              ),
-                              child: Text(_paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                            ),
-                          ),
-                          SizedBox(width: 8.w),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => _clearPayLaterPayment(order, 'CARD'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber.shade50,
-                                foregroundColor: Colors.amber.shade700,
-                                padding: EdgeInsets.symmetric(vertical: 14.h),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
-                                elevation: 0,
-                              ),
-                              child: Text(_paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ]
-                    // STATE 2: PAID STATE (Image 2)
-                    else if (isPaid && !isServed) ...[
-                      if (isRestaurant)
-                        Container(
-                          width: double.infinity,
-                          padding: EdgeInsets.symmetric(vertical: 16.h),
-                          decoration: BoxDecoration(
-                            color: Colors.green.shade50,
-                            borderRadius: BorderRadius.circular(20.r),
-                          ),
-                          child: Center(
-                            child: Text(
-                              '✓ PAID VIA ${order['paymentMethod']}',
-                              style: TextStyle(
-                                fontSize: 10.sp,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.green.shade700,
-                                letterSpacing: 1.w,
-                              ),
-                            ),
-                          ),
-                        )
-                      else
-                        Row(
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(
-                              flex: 1,
-                              child: Container(
-                                padding: EdgeInsets.symmetric(vertical: 16.h),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.horizontal(left: Radius.circular(20.r)),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    '✓ PAID VIA ${order['paymentMethod']}',
-                                    style: TextStyle(
-                                      fontSize: 10.sp,
-                                      fontWeight: FontWeight.w900,
-                                      color: Colors.green.shade700,
-                                      letterSpacing: 1.w,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              flex: 1,
-                              child: ElevatedButton(
-                                onPressed: () => _updateStatus(order, 'SERVED'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF10B981), // Emerald 500
-                                  padding: EdgeInsets.symmetric(vertical: 16.h),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.horizontal(right: Radius.circular(20.r)),
-                                  ),
-                                  elevation: 0,
-                                ),
-                                child: Text(
-                                  _statusUpdating == order['_id'] ? 'WAIT...' : 'CHECKOUT',
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _formatDateTime(order['createdAt']),
                                   style: TextStyle(
-                                    fontSize: 10.sp,
+                                    fontSize: 8.5.sp,
                                     fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                    letterSpacing: 1.w,
+                                    color: const Color(0xFF94A3B8),
+                                    letterSpacing: 0.5.w,
                                   ),
                                 ),
-                              ),
+                                Row(
+                                  children: [
+                                    Text(
+                                      '#$last4',
+                                      style: TextStyle(
+                                        fontSize: 8.5.sp,
+                                        fontWeight: FontWeight.w900,
+                                        color: const Color(0xFF94A3B8),
+                                      ),
+                                    ),
+                                    SizedBox(width: 6.w),
+                                    InkWell(
+                                      onTap: () => _cancelOrder(orderId),
+                                      borderRadius: BorderRadius.circular(6.r),
+                                      child: Padding(
+                                        padding: EdgeInsets.all(2.r),
+                                        child: Icon(
+                                          LucideIcons.trash2,
+                                          size: 12.sp,
+                                          color: const Color(0xFFCBD5E1),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
+                            SizedBox(height: 6.h),
+                            for (var item in orderItems) ...[
+                              Builder(builder: (ctx) {
+                                final itemData = item is Map ? item['item'] : null;
+                                final itemName = (itemData is Map ? itemData['branchName'] : null) ?? (item is Map ? item['name'] : '') ?? '';
+                                final itemPrice = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? (item is Map ? item['basePrice'] : null) ?? 0).toString()) ?? 0;
+                                final qty = num.tryParse(((item is Map ? item['quantity'] : null) ?? 1).toString()) ?? 1;
+                                final price = itemPrice * qty;
+
+                                return Padding(
+                                  padding: EdgeInsets.only(bottom: 4.h),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        padding: EdgeInsets.symmetric(horizontal: 5.w, vertical: 2.h),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(6.r),
+                                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                                        ),
+                                        child: Text(
+                                          '${qty}x',
+                                          style: TextStyle(
+                                            fontSize: 9.sp,
+                                            fontWeight: FontWeight.w900,
+                                            color: const Color(0xFF0F172A),
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(width: 6.w),
+                                      Expanded(
+                                        child: Text(
+                                          itemName.toString().toUpperCase(),
+                                          style: TextStyle(
+                                            fontSize: 10.sp,
+                                            fontWeight: FontWeight.bold,
+                                            color: const Color(0xFF334155),
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      Text(
+                                        '₹${price.toInt()}',
+                                        style: TextStyle(
+                                          fontSize: 10.sp,
+                                          fontWeight: FontWeight.bold,
+                                          color: const Color(0xFF94A3B8),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                            if (ordIdx < orders.length - 1)
+                              Padding(
+                                padding: EdgeInsets.symmetric(vertical: 6.h),
+                                child: Divider(height: 1.h, color: const Color(0xFFE2E8F0)),
+                              ),
                           ],
-                        ),
-                    ]
-                    // STATE 3: UNPAID STATE (Image 1)
-                    else if (!isPaid && !isServed) ...[
-                      if (!isFoodTruck && status == 'NEW') ...[
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: () => _updateStatus(order, 'ACCEPTED'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF0F172A),
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(vertical: 16.h),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12.r),
-                              ),
-                              elevation: 0,
-                            ),
-                            child: Text(
-                              _statusUpdating == order['_id'] ? '...' : 'ACCEPT',
-                              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w),
-                            ),
-                          ),
-                        ),
-                      ] else if (!isFoodTruck && status == 'ACCEPTED') ...[
-                        ElevatedButton(
-                          onPressed: () => _updateStatus(order, 'PREPARING'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(vertical: 16.h),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12.r),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: Text(
-                            _statusUpdating == order['_id'] ? '...' : 'COOKING',
-                            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w),
-                          ),
-                        ),
-                      ] else if (!isFoodTruck && status == 'PREPARING') ...[
-                        ElevatedButton(
-                          onPressed: () => _updateStatus(order, 'READY'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0F172A),
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(vertical: 16.h),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12.r),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: Text(
-                            _statusUpdating == order['_id'] ? '...' : 'READY',
-                            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w),
-                          ),
-                        ),
-                      ] else ...[
-                        Text(
-                          'COLLECT PAYMENT',
-                          style: TextStyle(
-                            fontSize: 9.sp,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.orange.shade600,
-                            letterSpacing: 2.w,
-                          ),
-                        ),
-                        SizedBox(height: 12.h),
-                        Row(
-                          children: [
-                            _buildPaymentButton(
-                              icon: Icons.payments_outlined,
-                              label: 'CASH',
-                              onPressed: () => isRestaurant
-                                  ? _handleCollectAndServe(order, 'CASH')
-                                  : _handleCollectEarly(order, 'CASH'),
-                              isLoading: _paymentUpdating == '${order['_id']}-CASH',
-                            ),
-                            SizedBox(width: 8.w),
-                            _buildPaymentButton(
-                              icon: Icons.qr_code_scanner,
-                              label: 'UPI',
-                              onPressed: () => isRestaurant
-                                  ? _handleCollectAndServe(order, 'UPI')
-                                  : _handleCollectEarly(order, 'UPI'),
-                              isLoading: _paymentUpdating == '${order['_id']}-UPI',
-                            ),
-                            SizedBox(width: 8.w),
-                            _buildPaymentButton(
-                              icon: Icons.credit_card,
-                              label: 'CARD',
-                              onPressed: () => isRestaurant
-                                  ? _handleCollectAndServe(order, 'CARD')
-                                  : _handleCollectEarly(order, 'CARD'),
-                              isLoading: _paymentUpdating == '${order['_id']}-CARD',
-                            ),
-                            SizedBox(width: 8.w),
-                            _buildPaymentButton(
-                              icon: Icons.content_cut,
-                              label: 'SPLIT',
-                              onPressed: () => setState(() => _splitTarget = order),
-                              isSplit: true,
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 12.h),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton(
-                            onPressed: () => _initiatePayLater(order),
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: Colors.amber.shade50.withValues(alpha: 0.2),
-                              foregroundColor: Colors.amber.shade700,
-                              side: BorderSide(color: Colors.amber.shade200, width: 1.r),
-                              padding: EdgeInsets.symmetric(vertical: 16.h),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12.r),
-                              ),
-                              elevation: 0,
-                            ),
-                            child: Text(
-                              _payLaterUpdating == order['_id'] ? '...' : 'Pay Later',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 12.sp,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                        );
+                      }),
                     ],
                   ],
                 ),
-              );
-            },
+              ),
+            ),
+          ),
+
+          // 3. Card Footer: Total Bill + Already Paid/Still Owes + Collect Partial + Settle All
+          Padding(
+            padding: EdgeInsets.all(14.r),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'TOTAL BILL',
+                      style: TextStyle(
+                        fontSize: 8.5.sp,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFFCBD5E1),
+                        letterSpacing: 2.w,
+                      ),
+                    ),
+                    Text(
+                      '₹${totalBill.toInt()}',
+                      style: TextStyle(
+                        fontSize: 20.sp,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                  ],
+                ),
+
+                if (totalPaid > 0) ...[
+                  SizedBox(height: 8.h),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFBEB), // amber-50
+                      borderRadius: BorderRadius.circular(10.r),
+                      border: Border.all(color: const Color(0xFFFEF3C7)), // amber-100
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'ALREADY PAID',
+                              style: TextStyle(
+                                fontSize: 8.sp,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFF16A34A),
+                                letterSpacing: 0.5.w,
+                              ),
+                            ),
+                            SizedBox(height: 1.h),
+                            Text(
+                              '₹${totalPaid.toInt()}',
+                              style: TextStyle(
+                                fontSize: 12.sp,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFF16A34A),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              'STILL OWES',
+                              style: TextStyle(
+                                fontSize: 8.sp,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFFD97706),
+                                letterSpacing: 0.5.w,
+                              ),
+                            ),
+                            SizedBox(height: 1.h),
+                            Text(
+                              '₹${totalOwed.toInt()}',
+                              style: TextStyle(
+                                fontSize: 12.sp,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFFD97706),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                SizedBox(height: 10.h),
+
+                // Collect Partial Payment Container
+                Container(
+                  padding: EdgeInsets.all(10.r),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14.r),
+                    border: Border.all(
+                      color: const Color(0xFFFEF3C7),
+                      width: 1.5.r,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'COLLECT PARTIAL PAYMENT',
+                        style: TextStyle(
+                          fontSize: 8.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF94A3B8),
+                          letterSpacing: 1.w,
+                        ),
+                      ),
+                      SizedBox(height: 6.h),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(10.r),
+                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                        ),
+                        child: TextField(
+                          controller: ctrl,
+                          keyboardType: TextInputType.number,
+                          style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A)),
+                          decoration: InputDecoration(
+                            hintText: 'Up to ₹${totalOwed.toInt()}',
+                            hintStyle: TextStyle(
+                              fontSize: 11.sp,
+                              fontWeight: FontWeight.w500,
+                              color: const Color(0xFF94A3B8),
+                            ),
+                            prefixIcon: Icon(
+                              Icons.currency_rupee,
+                              size: 13.sp,
+                              color: const Color(0xFF94A3B8),
+                            ),
+                            prefixIconConstraints: BoxConstraints(minWidth: 28.w),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(vertical: 8.h, horizontal: 8.w),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 6.h),
+                      Row(
+                        children: ['CASH', 'UPI', 'CARD'].map((m) {
+                          return Expanded(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 2.w),
+                              child: ElevatedButton(
+                                onPressed: isCollecting ? null : () => _handleCollectPartialPayLater(group, m),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF0F172A),
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  padding: EdgeInsets.symmetric(vertical: 7.h),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8.r),
+                                  ),
+                                ),
+                                child: Text(
+                                  isCollecting ? '...' : m,
+                                  style: TextStyle(
+                                    fontSize: 8.5.sp,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.5.w,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+
+                SizedBox(height: 10.h),
+
+                // Settle All Pick Method
+                Text(
+                  'SETTLE ALL — PICK METHOD',
+                  style: TextStyle(
+                    fontSize: 8.sp,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFFD97706),
+                    letterSpacing: 1.w,
+                  ),
+                ),
+                SizedBox(height: 6.h),
+                Row(
+                  children: ['CASH', 'UPI', 'CARD'].map((m) {
+                    final isBusy = _paymentUpdating != null;
+                    return Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 2.w),
+                        child: OutlinedButton(
+                          onPressed: isBusy ? null : () => _handleSettleAllPayLater(group, m),
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: const Color(0xFFFFFBEB),
+                            foregroundColor: const Color(0xFFB45309),
+                            side: const BorderSide(color: Color(0xFFFDE68A)),
+                            elevation: 0,
+                            padding: EdgeInsets.symmetric(vertical: 9.h),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10.r),
+                            ),
+                          ),
+                          child: Text(
+                            m,
+                            style: TextStyle(
+                              fontSize: 9.sp,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.5.w,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1548,7 +2495,6 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
-    final isFoodTruck = authState.user?['businessType'] == "FOOD_TRUCK";
 
     // Reactive: If user just loaded, initialize data
     if (authState.user != null && _socket == null && !_isLoading) {
@@ -1558,44 +2504,63 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     }
 
     final isMobile = 1.sw < 768;
-    List<dynamic> displayList = _activeFilter == 'SERVED'
-        ? _servedOrders
-        : _activeFilter == 'PAY_LATER'
-        ? _payLaterOrders
-        : _activeFilter == 'LIVE'
-        ? _orders
-              .where((o) =>
-                  o is Map &&
-                  (o['status'] != 'SERVED' ||
-                      _pendingCheckoutIds.contains(o['_id'].toString())) &&
-                  o['paymentStatus'] != 'PAY_LATER')
-              .toList()
-        : _orders
-              .where((o) => o is Map && o['status'] == _activeFilter)
-              .toList();
+
+    if (_activeFilter == 'LIVE') {
+      _activeFilter = 'All';
+    }
+
+    final bool isPayLaterTab = _activeFilter == 'PAY_LATER';
+    final List<Map<String, dynamic>> groupedPayLater = isPayLaterTab ? _getGroupedPayLaterOrders() : [];
+
+    List<dynamic> displayList;
+    if (_activeFilter == 'SERVED') {
+      displayList = _servedOrders;
+    } else if (_activeFilter == 'PAY_LATER') {
+      displayList = _payLaterOrders;
+    } else if (_activeFilter == 'All') {
+      displayList = _orders
+          .where((o) =>
+              o is Map &&
+              o['status'] != 'CANCELLED' &&
+              (o['status'] != 'SERVED' ||
+                  _pendingCheckoutIds.contains(o['_id'].toString())) &&
+              o['paymentStatus'] != 'PAY_LATER')
+          .toList();
+    } else {
+      displayList = _orders
+          .where((o) =>
+              o is Map &&
+              o['status'] != 'CANCELLED' &&
+              o['status'] == _activeFilter &&
+              o['paymentStatus'] != 'PAY_LATER')
+          .toList();
+    }
 
     displayList = displayList
         .where((o) => o is Map && o['status'] != 'CANCELLED')
         .toList();
 
-    if (_searchQuery.isNotEmpty) {
-      displayList = displayList
-          .where(
-            (o) =>
-                (o['customerName'] ?? '').toString().toLowerCase().contains(
-                  _searchQuery.toLowerCase(),
-                ) ||
-                (o['tableNumber'] ?? '').toString().toLowerCase().contains(
-                  _searchQuery.toLowerCase(),
-                ),
-          )
-          .toList();
+    if (_searchQuery.trim().isNotEmpty) {
+      final q = _searchQuery.trim().toLowerCase();
+      displayList = displayList.where((o) {
+        if (o is! Map) return false;
+        final name = (o['customerName'] ?? '').toString().toLowerCase();
+        final table = (o['tableNumber'] ?? '').toString().toLowerCase();
+        final id = (o['_id'] ?? '').toString().toLowerCase();
+        return name.contains(q) ||
+            table.contains(q) ||
+            (id.length >= 4 && id.substring(id.length - 4).contains(q));
+      }).toList();
     }
 
     final filters = [
-      "LIVE",
+      "All",
+      "NEW",
+      "ACCEPTED",
+      "PREPARING",
+      "READY",
       "SERVED",
-      "PAY_LATER",
+      "PAY_LATER"
     ];
     final topSelling = _getTopSelling();
 
@@ -1643,27 +2608,37 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             Row(
                               children: [
                                 Container(
-                                  width: 12.r,
-                                  height: 12.r,
+                                  width: 10.r,
+                                  height: 10.r,
                                   decoration: const BoxDecoration(
-                                    color: Colors.orange,
+                                    color: Color(0xFFF97316),
                                     shape: BoxShape.circle,
                                   ),
                                 ),
                                 SizedBox(width: 8.w),
-                                Text(
-                                  'LIVE ORDERS',
-                                  style: TextStyle(
-                                    fontSize: 24.sp,
-                                    fontWeight: FontWeight.w900,
-                                    color: const Color(0xFF0F172A),
+                                RichText(
+                                  text: TextSpan(
+                                    style: TextStyle(
+                                      fontSize: 24.sp,
+                                      fontWeight: FontWeight.w900,
+                                      color: const Color(0xFF0F172A),
+                                    ),
+                                    children: const [
+                                      TextSpan(text: 'LIVE '),
+                                      TextSpan(
+                                        text: 'ORDERS',
+                                        style: TextStyle(
+                                          color: Color(0xFFEA580C),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                                 const Spacer(),
                                 IconButton(
                                   icon: Icon(
                                     LucideIcons.externalLink,
-                                    color: Colors.orange,
+                                    color: const Color(0xFFEA580C),
                                     size: 20.sp,
                                   ),
                                   onPressed: () {
@@ -1680,7 +2655,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                               style: TextStyle(
                                 fontSize: 10.sp,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey,
+                                color: const Color(0xFF64748B),
                                 letterSpacing: 2.w,
                               ),
                             ),
@@ -1693,7 +2668,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                       color: Colors.white,
                                       borderRadius: BorderRadius.circular(12.r),
                                       border: Border.all(
-                                        color: Colors.grey.shade200,
+                                        color: const Color(0xFFE2E8F0),
                                       ),
                                     ),
                                     child: TextField(
@@ -1701,10 +2676,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                           setState(() => _searchQuery = val),
                                       decoration: InputDecoration(
                                         hintText: 'Search name or table...',
+                                        hintStyle: TextStyle(
+                                          color: const Color(0xFF94A3B8),
+                                          fontSize: 13.sp,
+                                        ),
                                         prefixIcon: Icon(
                                           LucideIcons.search,
                                           size: 18.sp,
-                                          color: Colors.grey,
+                                          color: const Color(0xFF94A3B8),
                                         ),
                                         border: InputBorder.none,
                                         contentPadding: EdgeInsets.symmetric(
@@ -1714,36 +2693,34 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                     ),
                                   ),
                                 ),
-                                if (isFoodTruck) ...[
-                                  SizedBox(width: 8.w),
-                                  ElevatedButton.icon(
-                                    onPressed: () {
-                                      setState(() => _appendTarget = null);
-                                      _scaffoldKey.currentState?.openEndDrawer();
-                                    },
-                                    icon: Icon(LucideIcons.plus, size: 16.sp),
-                                    label: Text(
-                                      'CREATE ORDER',
-                                      style: TextStyle(
-                                        fontSize: 10.sp,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF0F172A),
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(
-                                          12.r,
-                                        ),
-                                      ),
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 16.w,
-                                        vertical: 14.h,
-                                      ),
+                                SizedBox(width: 8.w),
+                                ElevatedButton.icon(
+                                  onPressed: () {
+                                    setState(() => _appendTarget = null);
+                                    _scaffoldKey.currentState?.openEndDrawer();
+                                  },
+                                  icon: Icon(LucideIcons.plus, size: 16.sp),
+                                  label: Text(
+                                    'CREATE ORDER',
+                                    style: TextStyle(
+                                      fontSize: 10.sp,
+                                      fontWeight: FontWeight.w900,
                                     ),
                                   ),
-                                ],
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF0F172A),
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(
+                                        12.r,
+                                      ),
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 16.w,
+                                      vertical: 14.h,
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                           ],
@@ -1758,20 +2735,30 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 Row(
                                   children: [
                                     Container(
-                                      width: 12.r,
-                                      height: 12.r,
+                                      width: 10.r,
+                                      height: 10.r,
                                       decoration: const BoxDecoration(
-                                        color: Colors.orange,
+                                        color: Color(0xFFF97316),
                                         shape: BoxShape.circle,
                                       ),
                                     ),
                                     SizedBox(width: 8.w),
-                                    Text(
-                                      'LIVE ORDERS',
-                                      style: TextStyle(
-                                        fontSize: 28.sp,
-                                        fontWeight: FontWeight.w900,
-                                        color: const Color(0xFF0F172A),
+                                    RichText(
+                                      text: TextSpan(
+                                        style: TextStyle(
+                                          fontSize: 28.sp,
+                                          fontWeight: FontWeight.w900,
+                                          color: const Color(0xFF0F172A),
+                                        ),
+                                        children: const [
+                                          TextSpan(text: 'LIVE '),
+                                          TextSpan(
+                                            text: 'ORDERS',
+                                            style: TextStyle(
+                                              color: Color(0xFFEA580C),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
@@ -1781,7 +2768,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   style: TextStyle(
                                     fontSize: 10.sp,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.grey,
+                                    color: const Color(0xFF64748B),
                                     letterSpacing: 2.w,
                                   ),
                                 ),
@@ -1808,7 +2795,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                     ),
                                   ),
                                   style: TextButton.styleFrom(
-                                    foregroundColor: Colors.orange,
+                                    foregroundColor: const Color(0xFFEA580C),
                                   ),
                                 ),
                                 SizedBox(width: 16.w),
@@ -1818,7 +2805,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(12.r),
                                     border: Border.all(
-                                      color: Colors.grey.shade200,
+                                      color: const Color(0xFFE2E8F0),
                                     ),
                                   ),
                                   child: TextField(
@@ -1826,10 +2813,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                         setState(() => _searchQuery = val),
                                     decoration: InputDecoration(
                                       hintText: 'Search name or table...',
+                                      hintStyle: TextStyle(
+                                        color: const Color(0xFF94A3B8),
+                                        fontSize: 13.sp,
+                                      ),
                                       prefixIcon: Icon(
                                         LucideIcons.search,
                                         size: 18.sp,
-                                        color: Colors.grey,
+                                        color: const Color(0xFF94A3B8),
                                       ),
                                       border: InputBorder.none,
                                       contentPadding: EdgeInsets.symmetric(
@@ -1838,36 +2829,34 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                     ),
                                   ),
                                 ),
-                                if (isFoodTruck) ...[
-                                  SizedBox(width: 12.w),
-                                  ElevatedButton.icon(
-                                    onPressed: () {
-                                      setState(() => _appendTarget = null);
-                                      _scaffoldKey.currentState?.openEndDrawer();
-                                    },
-                                    icon: Icon(LucideIcons.plus, size: 16.sp),
-                                    label: Text(
-                                      'CREATE ORDER',
-                                      style: TextStyle(
-                                        fontSize: 12.sp,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF0F172A),
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(
-                                          12.r,
-                                        ),
-                                      ),
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 20.w,
-                                        vertical: 16.h,
-                                      ),
+                                SizedBox(width: 12.w),
+                                ElevatedButton.icon(
+                                  onPressed: () {
+                                    setState(() => _appendTarget = null);
+                                    _scaffoldKey.currentState?.openEndDrawer();
+                                  },
+                                  icon: Icon(LucideIcons.plus, size: 16.sp),
+                                  label: Text(
+                                    'CREATE ORDER',
+                                    style: TextStyle(
+                                      fontSize: 12.sp,
+                                      fontWeight: FontWeight.w900,
                                     ),
                                   ),
-                                ],
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF0F172A),
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(
+                                        12.r,
+                                      ),
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 20.w,
+                                      vertical: 16.h,
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                           ],
@@ -1880,28 +2869,50 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         child: Row(
                           children: filters.map((f) {
                             final isActive = _activeFilter == f;
-                            final count = f == "LIVE"
-                                ? _orders
-                                      .where(
-                                        (o) =>
-                                            o is Map &&
-                                            o['status'] != 'CANCELLED' &&
-                                            (o['status'] != 'SERVED' ||
-                                                _pendingCheckoutIds.contains(
-                                                  o['_id'].toString(),
-                                                )) &&
-                                            o['paymentStatus'] != 'PAY_LATER',
-                                      )
-                                      .length
-                                : f == "SERVED"
-                                ? _servedOrders.length
-                                : f == "PAY_LATER"
-                                ? _payLaterOrders.length
-                                : _orders
-                                      .where(
-                                        (o) => o is Map && o['status'] == f,
-                                      )
-                                      .length;
+                            final int count;
+                            if (f == "All" || f == "LIVE") {
+                              count = _orders.where((o) =>
+                                  o is Map &&
+                                  o['status'] != 'CANCELLED' &&
+                                  (o['status'] != 'SERVED' || _pendingCheckoutIds.contains(o['_id'].toString())) &&
+                                  o['paymentStatus'] != 'PAY_LATER').length;
+                            } else if (f == "SERVED") {
+                              count = _servedOrders.length;
+                            } else if (f == "PAY_LATER") {
+                              count = _payLaterOrders.length;
+                            } else {
+                              count = _orders.where((o) =>
+                                  o is Map &&
+                                  o['status'] != 'CANCELLED' &&
+                                  o['status'] == f &&
+                                  o['paymentStatus'] != 'PAY_LATER').length;
+                            }
+
+                            final String label = f == "All"
+                                ? "ALL"
+                                : f == "PREPARING"
+                                    ? "COOKING"
+                                    : f == "PAY_LATER"
+                                        ? "PAY LATER"
+                                        : f;
+
+                            final isPayLater = f == "PAY_LATER";
+                            final Color bgColor = isActive
+                                ? (isPayLater ? const Color(0xFFFBBF24) : const Color(0xFF0F172A))
+                                : Colors.white;
+                            final Color borderColor = isActive
+                                ? (isPayLater ? const Color(0xFFFBBF24) : const Color(0xFF0F172A))
+                                : const Color(0xFFE2E8F0);
+                            final Color textColor = isActive
+                                ? (isPayLater ? const Color(0xFF0F172A) : Colors.white)
+                                : const Color(0xFF94A3B8);
+                            final Color badgeBg = isActive
+                                ? (isPayLater ? const Color(0xFFD97706) : const Color(0xFFF97316))
+                                : const Color(0xFFF1F5F9);
+                            final Color badgeText = isActive
+                                ? Colors.white
+                                : const Color(0xFF64748B);
+
                             return Padding(
                               padding: EdgeInsets.only(right: 8.0.w),
                               child: InkWell(
@@ -1909,34 +2920,24 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 borderRadius: BorderRadius.circular(24.r),
                                 child: Container(
                                   padding: EdgeInsets.symmetric(
-                                    horizontal: 20.w,
-                                    vertical: 10.h,
+                                    horizontal: 18.w,
+                                    vertical: 9.h,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: isActive
-                                        ? const Color(0xFF0F172A)
-                                        : Colors.white,
+                                    color: bgColor,
                                     borderRadius: BorderRadius.circular(24.r),
-                                    border: Border.all(
-                                      color: isActive
-                                          ? const Color(0xFF0F172A)
-                                          : Colors.grey.shade300,
-                                    ),
+                                    border: Border.all(color: borderColor),
                                   ),
                                   child: Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Text(
-                                        f == "PREPARING"
-                                            ? "COOKING"
-                                            : f == "PAY_LATER"
-                                            ? "PAY LATER"
-                                            : f,
+                                        label,
                                         style: TextStyle(
                                           fontSize: 11.sp,
                                           fontWeight: FontWeight.w900,
-                                          color: isActive
-                                              ? Colors.white
-                                              : Colors.grey,
+                                          letterSpacing: 0.5.w,
+                                          color: textColor,
                                         ),
                                       ),
                                       SizedBox(width: 8.w),
@@ -1946,21 +2947,15 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                           vertical: 2.h,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: isActive
-                                              ? Colors.orange
-                                              : Colors.grey.shade100,
-                                          borderRadius: BorderRadius.circular(
-                                            6.r,
-                                          ),
+                                          color: badgeBg,
+                                          borderRadius: BorderRadius.circular(6.r),
                                         ),
                                         child: Text(
                                           '$count',
                                           style: TextStyle(
                                             fontSize: 9.sp,
-                                            fontWeight: FontWeight.bold,
-                                            color: isActive
-                                                ? Colors.white
-                                                : Colors.grey,
+                                            fontWeight: FontWeight.w900,
+                                            color: badgeText,
                                           ),
                                         ),
                                       ),
@@ -1972,7 +2967,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           }).toList(),
                         ),
                       ),
-                      SizedBox(height: 24.h),
+                      SizedBox(height: 16.h),
+
+                      // SERVED PERIOD FILTER BAR
+                      if (_activeFilter == 'SERVED') ...[
+                        _buildServedDateFilterBar(),
+                      ],
 
                       // TOP SELLING ITEMS
                       if (_activeFilter == 'SERVED' && topSelling.isNotEmpty)
@@ -2117,55 +3117,33 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           ),
                         ),
 
-                      if (_activeFilter == 'PAY_LATER')
+                      // PAY LATER PENDING BANNER
+                      if (_activeFilter == 'PAY_LATER' && _payLaterOrders.isNotEmpty)
                         Container(
-                          margin: EdgeInsets.only(top: 24.h),
-                          padding: EdgeInsets.all(24.r),
+                          margin: EdgeInsets.only(top: 16.h, bottom: 8.h),
+                          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
                           decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFFFFF7ED), Color(0xFFFFF1F2)],
-                            ),
-                            borderRadius: BorderRadius.circular(32.r),
-                            border: Border.all(
-                              color: Colors.orange.withValues(alpha: 0.2),
-                            ),
+                            color: const Color(0xFFFFFBEB),
+                            borderRadius: BorderRadius.circular(20.r),
+                            border: Border.all(color: const Color(0xFFFDE68A)),
                           ),
                           child: Row(
                             children: [
-                              Container(
-                                padding: EdgeInsets.all(12.r),
-                                decoration: const BoxDecoration(
-                                  color: Colors.white,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  Icons.receipt_long,
-                                  color: Colors.orange,
-                                  size: 24.sp,
-                                ),
+                              Icon(
+                                LucideIcons.alertCircle,
+                                size: 18.sp,
+                                color: const Color(0xFFD97706),
                               ),
-                              SizedBox(width: 16.w),
+                              SizedBox(width: 12.w),
                               Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'PAY LATER ORDERS',
-                                      style: TextStyle(
-                                        fontSize: 16.sp,
-                                        fontWeight: FontWeight.w900,
-                                        color: const Color(0xFF0F172A),
-                                      ),
-                                    ),
-                                    SizedBox(height: 4.h),
-                                    Text(
-                                      'Orders marked for payment collection later.',
-                                      style: TextStyle(
-                                        fontSize: 12.sp,
-                                        color: Colors.black54,
-                                      ),
-                                    ),
-                                  ],
+                                child: Text(
+                                  '${_payLaterOrders.length} ORDER${_payLaterOrders.length > 1 ? "S" : ""} PENDING PAYMENT — COLLECT WHEN CUSTOMER RETURNS',
+                                  style: TextStyle(
+                                    fontSize: 11.sp,
+                                    fontWeight: FontWeight.w900,
+                                    color: const Color(0xFFB45309),
+                                    letterSpacing: 0.5.w,
+                                  ),
                                 ),
                               ),
                             ],
@@ -2184,7 +3162,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         child: CircularProgressIndicator(color: Colors.orange),
                       ),
                     )
-                  : displayList.isEmpty
+                  : (isPayLaterTab ? groupedPayLater.isEmpty : displayList.isEmpty)
                   ? SliverFillRemaining(
                       child: Center(
                         child: Column(
@@ -2193,18 +3171,18 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             Container(
                               padding: EdgeInsets.all(24.r),
                               decoration: BoxDecoration(
-                                color: Colors.orange.shade50,
+                                color: isPayLaterTab ? const Color(0xFFFFFBEB) : Colors.orange.shade50,
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
-                                LucideIcons.utensilsCrossed,
+                                isPayLaterTab ? LucideIcons.alertCircle : LucideIcons.utensilsCrossed,
                                 size: 40.sp,
-                                color: Colors.orange.shade200,
+                                color: isPayLaterTab ? const Color(0xFFFDE68A) : Colors.orange.shade200,
                               ),
                             ),
                             SizedBox(height: 16.h),
                             Text(
-                              _activeFilter == 'PAY_LATER'
+                              isPayLaterTab
                                   ? 'NO PAY LATER ORDERS'
                                   : 'NO ACTIVE ORDERS',
                               style: TextStyle(
@@ -2215,15 +3193,15 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             ),
                             SizedBox(height: 8.h),
                             Text(
-                              _activeFilter == 'All'
+                              isPayLaterTab
+                                  ? 'All customers are settled up! 🎉'
+                                  : _activeFilter == 'All'
                                   ? 'Kitchen is quiet... Maybe the chef is taking a nap? 💤'
-                                  : _activeFilter == 'PAY_LATER'
-                                  ? 'No pending pay later orders.'
                                   : 'No orders in $_activeFilter stage.',
                               style: TextStyle(
                                 fontSize: 12.sp,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey,
+                                color: isPayLaterTab ? const Color(0xFF94A3B8) : Colors.grey,
                               ),
                             ),
                           ],
@@ -2241,30 +3219,39 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           ? SliverList(
                               delegate: SliverChildBuilderDelegate(
                                 (context, index) {
+                                  if (isPayLaterTab) {
+                                    return Padding(
+                                      padding: EdgeInsets.only(bottom: 24.h),
+                                      child: _buildPayLaterCustomerCard(context, groupedPayLater[index]),
+                                    );
+                                  }
                                   final order = displayList[index];
                                   if (order is! Map) return const SizedBox.shrink();
                                   return Padding(
                                     padding: EdgeInsets.only(bottom: 24.h),
-                                    child: _buildOrderCard(context, order, isFoodTruck, authState),
+                                    child: _buildOrderCard(context, order, authState),
                                   );
                                 },
-                                childCount: displayList.length,
+                                childCount: isPayLaterTab ? groupedPayLater.length : displayList.length,
                               ),
                             )
                           : SliverGrid(
                               gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                                maxCrossAxisExtent: 400.w,
+                                maxCrossAxisExtent: 420.w,
                                 mainAxisSpacing: 24.h,
                                 crossAxisSpacing: 24.w,
-                                childAspectRatio: 0.70,
+                                childAspectRatio: isPayLaterTab ? 0.54 : 0.70,
                               ),
                               delegate: SliverChildBuilderDelegate(
                                 (context, index) {
+                                  if (isPayLaterTab) {
+                                    return _buildPayLaterCustomerCard(context, groupedPayLater[index]);
+                                  }
                                   final order = displayList[index];
                                   if (order is! Map) return const SizedBox.shrink();
-                                  return _buildOrderCard(context, order, isFoodTruck, authState);
+                                  return _buildOrderCard(context, order, authState);
                                 },
-                                childCount: displayList.length,
+                                childCount: isPayLaterTab ? groupedPayLater.length : displayList.length,
                               ),
                             ),
                     ),
@@ -2628,9 +3615,17 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   }
 
   Widget _buildPayLaterModal() {
+    final existingNames = _payLaterOrders
+        .map((o) => (o is Map ? o['customerName']?.toString() : null))
+        .where((n) => n != null && n.trim().isNotEmpty)
+        .map((n) => n!.trim())
+        .toSet()
+        .toList();
+
     return PayLaterModalWidget(
       order: _payLaterTarget['order'],
       defaultName: _payLaterTarget['defaultName'],
+      existingNames: existingNames,
       onConfirm: (name, paidNow, remaining) {
         _handlePayLater(_payLaterTarget['order'], name, paidNow, remaining);
       },
@@ -2653,6 +3648,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 class PayLaterModalWidget extends StatefulWidget {
   final dynamic order;
   final String defaultName;
+  final List<String> existingNames;
   final Function(String, num, num?) onConfirm;
   final VoidCallback onCancel;
 
@@ -2660,12 +3656,13 @@ class PayLaterModalWidget extends StatefulWidget {
     super.key,
     required this.order,
     required this.defaultName,
+    this.existingNames = const [],
     required this.onConfirm,
     required this.onCancel,
   });
 
   @override
-  _PayLaterModalWidgetState createState() => _PayLaterModalWidgetState();
+  State<PayLaterModalWidget> createState() => _PayLaterModalWidgetState();
 }
 
 class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
@@ -2778,6 +3775,94 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
                 ),
                 style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900),
               ),
+              if (_nameCtrl.text.trim().isNotEmpty && widget.existingNames.isNotEmpty) ...[
+                Builder(builder: (ctx) {
+                  final query = _nameCtrl.text.trim().toLowerCase();
+                  final matches = widget.existingNames
+                      .where((n) => n.toLowerCase().contains(query) && n.toLowerCase() != query)
+                      .take(4)
+                      .toList();
+                  if (matches.isEmpty) return const SizedBox.shrink();
+
+                  return Container(
+                    margin: EdgeInsets.only(top: 8.h),
+                    padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFBEB),
+                      borderRadius: BorderRadius.circular(16.r),
+                      border: Border.all(color: const Color(0xFFFDE68A)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'EXISTING CUSTOMERS',
+                          style: TextStyle(
+                            fontSize: 8.sp,
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFFD97706),
+                            letterSpacing: 1.w,
+                          ),
+                        ),
+                        SizedBox(height: 6.h),
+                        Wrap(
+                          spacing: 6.w,
+                          runSpacing: 6.h,
+                          children: matches.map((m) {
+                            return InkWell(
+                              onTap: () {
+                                setState(() {
+                                  _nameCtrl.text = m;
+                                });
+                              },
+                              borderRadius: BorderRadius.circular(10.r),
+                              child: Container(
+                                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(10.r),
+                                  border: Border.all(color: const Color(0xFFFDE68A)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 16.r,
+                                      height: 16.r,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFFEF3C7),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        m[0].toUpperCase(),
+                                        style: TextStyle(
+                                          fontSize: 8.sp,
+                                          fontWeight: FontWeight.w900,
+                                          color: const Color(0xFFD97706),
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(width: 5.w),
+                                    Text(
+                                      m,
+                                      style: TextStyle(
+                                        fontSize: 10.5.sp,
+                                        fontWeight: FontWeight.bold,
+                                        color: const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
               SizedBox(height: 16.h),
               if (orderTotal > 0)
                 SizedBox(
@@ -2989,7 +4074,7 @@ class SplitPaymentModalWidget extends StatefulWidget {
   });
 
   @override
-  _SplitPaymentModalWidgetState createState() =>
+  State<SplitPaymentModalWidget> createState() =>
       _SplitPaymentModalWidgetState();
 }
 
