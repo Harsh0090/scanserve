@@ -208,6 +208,20 @@ class _HomePageState extends ConsumerState<HomePage> {
                           },
                         ),
                         PopupMenuItem(
+                          child: Text(
+                            'Settings',
+                            style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900),
+                          ),
+                          onTap: () => context.push('/dashboard/settings'),
+                        ),
+                        PopupMenuItem(
+                          child: Text(
+                            'Profile',
+                            style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900),
+                          ),
+                          onTap: () => context.push('/dashboard/profile'),
+                        ),
+                        PopupMenuItem(
                           onTap: _handleLogout,
                           child: Text(
                             'Log Out',

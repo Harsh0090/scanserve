@@ -9,6 +9,7 @@ import '../../../utils/apiClient.dart';
 import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import '../../components/MenuModal.dart';
+import '../../../services/kot_print_service.dart';
 
 class OrdersPage extends ConsumerStatefulWidget {
   const OrdersPage({super.key});
@@ -41,6 +42,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   String? _paymentUpdating;
   Map<String, dynamic>? _appendTarget;
   final Set<String> _pendingCheckoutIds = {};
+  final Set<String> _processedEvents = {};
+  final Set<String> _shownPromptKeys = {};
 
   IO.Socket? _socket;
 
@@ -110,16 +113,30 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       final newOrder = (data is List && data.isNotEmpty) ? data[0] : data;
       if (newOrder is! Map) return;
 
+      final orderId = newOrder['_id']?.toString() ?? '';
+      final eventKey = "$orderId-${newOrder['type'] ?? 'base'}-${newOrder['updatedAt'] ?? newOrder['createdAt']}";
+
+      // Socket event deduplication with 10s auto-cleanup
+      if (_processedEvents.contains(eventKey)) return;
+      _processedEvents.add(eventKey);
+      Future.delayed(const Duration(seconds: 10), () => _processedEvents.remove(eventKey));
+
+      final user = ref.read(authProvider).user;
+      final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+      final bool liveOrderKOT = userData['liveOrderKOT'] == true;
+      final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+
       setState(() {
-        final orderId = newOrder['_id'];
-        final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId.toString());
+        final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId);
         if (idx != -1) {
           if (newOrder['type'] == 'ITEM_ADDED') {
             final newItems = newOrder['newItems'];
             if (newItems is List && newItems.isNotEmpty) {
-              final autoPrintKOT =
-                  ref.read(authProvider).user?['autoPrintKOT'] == true;
-              if (autoPrintKOT) {
+              // TRIGGER 2: Add-on items added to existing order
+              // if user.autoPrintKOT == true AND user.liveOrderKOT == false:
+              //     showKOTPrompt(order: existingOrder, items: socketData.newItems, isAddOn: true)
+              // Note: when liveOrderKOT is true, backend handles this automatically
+              if (autoPrintKOT && !liveOrderKOT) {
                 _showKOTToast(_orders[idx], newItems, true);
               }
             }
@@ -130,16 +147,26 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   newOrder['estimatedTotal'] ?? _orders[idx]['estimatedTotal'],
               'subTotal': newOrder['subTotal'] ?? _orders[idx]['subTotal'],
               'updatedAt': newOrder['updatedAt'],
+              if (newOrder['lastAddedItems'] != null)
+                'lastAddedItems': newOrder['lastAddedItems'],
             };
           } else {
             _orders[idx] = {..._orders[idx] as Map, ...newOrder};
           }
         } else {
+          // TRIGGER 1: New order arrives via socket (not already in local list)
           final status = newOrder['status'];
-          if ((status == 'SERVED' || status == 'CANCELLED') && !_pendingCheckoutIds.contains(orderId.toString())) {
+          if ((status == 'SERVED' || status == 'CANCELLED') && !_pendingCheckoutIds.contains(orderId)) {
             return;
           }
-          _showKOTToast(newOrder, newOrder['items'] ?? [], false);
+
+          final items = (newOrder['items'] is List) ? List<dynamic>.from(newOrder['items']) : <dynamic>[];
+          if (liveOrderKOT) {
+            _silentPrintKOT(orderId, items, false);
+          } else if (autoPrintKOT) {
+            _showKOTToast(newOrder, items, false);
+          }
+
           _orders.insert(0, newOrder);
         }
       });
@@ -165,14 +192,22 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
   void _showKOTToast(dynamic order, List<dynamic> itemsToShow, bool isAddOn) {
     if (!mounted) return;
+    // Step 1: Filter out skipKitchen items
     final kitchenItems = itemsToShow
         .where((i) => i is Map && i['skipKitchen'] != true)
         .toList();
-    if (kitchenItems.isEmpty) return;
+    if (kitchenItems.isEmpty) return; // Nothing to print
+
+    final orderId = order['_id']?.toString() ?? '';
+    final promptKey = "kot-$orderId-${isAddOn ? 'addon' : 'new'}-${kitchenItems.length}";
+    if (_shownPromptKeys.contains(promptKey)) return;
+    _shownPromptKeys.add(promptKey);
+    Future.delayed(const Duration(seconds: 15), () => _shownPromptKeys.remove(promptKey));
 
     final title = isAddOn ? "Add-on Order" : "New Order";
     final table = order['tableNumber'] ?? order['customerName'] ?? "NA";
 
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -184,12 +219,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '$title - $table',
+                    '$title — Table $table',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   Text(
                     '${kitchenItems.length} items to print',
-                    style: const TextStyle(fontSize: 10),
+                    style: const TextStyle(fontSize: 11),
                   ),
                 ],
               ),
@@ -200,7 +235,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           label: 'PRINT KOT',
           textColor: Colors.orange,
           onPressed: () {
-            // printKOT logic here
+            // TRIGGER 4: User taps "PRINT KOT" button
             _printKOT(order, itemsToShow, isAddOn);
           },
         ),
@@ -210,8 +245,40 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     );
   }
 
-  void _printKOT(dynamic order, List<dynamic> itemsToShow, bool isAddOn) {
-    debugPrint("Print KOT logic placeholder for order: ${order['_id']}");
+  Future<void> _silentPrintKOT(String orderId, List<dynamic> items, bool isAddOn) async {
+    try {
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(orderId: orderId, items: items, isAddOn: isAddOn);
+    } catch (e) {
+      debugPrint("❌ Silent KOT print failed: $e");
+    }
+  }
+
+  Future<void> _printKOT(dynamic order, List<dynamic> itemsToShow, bool isAddOn) async {
+    try {
+      final orderId = order['_id']?.toString() ?? '';
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(orderId: orderId, items: itemsToShow, isAddOn: isAddOn);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('KOT sent to printer ✓'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('KOT Print Failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _fetchOrders() async {
@@ -644,12 +711,33 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   Future<void> _updateStatus(dynamic order, String nextStatus) async {
     try {
       setState(() => _statusUpdating = order['_id']);
-      await apiFetch(
+      final result = await apiFetch(
         '/api/admin/orders/${order['_id']}/status',
         method: 'PATCH',
         data: {'status': nextStatus},
       );
-      if (nextStatus == 'SERVED') {
+      if (nextStatus == 'ACCEPTED') {
+        // TRIGGER 3: Admin Accepts Order (Status -> ACCEPTED)
+        final updatedOrder = (result is Map && result['order'] != null)
+            ? result['order']
+            : (result is Map ? result : order);
+        final user = ref.read(authProvider).user;
+        final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+        final bool liveOrderKOT = userData['liveOrderKOT'] == true;
+        final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+
+        final items = (updatedOrder['items'] is List)
+            ? List<dynamic>.from(updatedOrder['items'])
+            : ((order is Map && order['items'] is List)
+                ? List<dynamic>.from(order['items'])
+                : <dynamic>[]);
+
+        if (liveOrderKOT) {
+          _silentPrintKOT(updatedOrder['_id'].toString(), items, false);
+        } else if (autoPrintKOT) {
+          _showKOTToast(updatedOrder, items, false);
+        }
+      } else if (nextStatus == 'SERVED') {
         _printOrderBill(order);
         setState(() {
           _pendingCheckoutIds.remove(order['_id'].toString());

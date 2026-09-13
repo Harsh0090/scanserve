@@ -76,6 +76,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
       "href": "/dashboard/IncreaseBranchLimit",
       "icon": LucideIcons.podcast,
     },
+    {
+      "name": "Settings",
+      "href": "/dashboard/settings",
+      "icon": LucideIcons.settings,
+    },
+    {
+      "name": "Profile",
+      "href": "/dashboard/profile",
+      "icon": LucideIcons.user,
+    },
   ];
 
   List<Map<String, dynamic>> _getFilteredItems(Map<String, dynamic>? rawUser) {
@@ -102,6 +112,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 "Menu Manager",
                 "Inventory",
                 "Payment Setup",
+                "Settings",
+                "Profile",
               ].contains(item['name']),
             )
             .toList();
@@ -117,6 +129,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 "Inventory",
                 "QR Print",
                 "Payment Setup",
+                "Settings",
+                "Profile",
               ].contains(item['name']),
             )
             .toList();

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -6,14 +7,16 @@ import 'package:dio/dio.dart';
 import 'dart:math' as math;
 import '../../../utils/apiClient.dart';
 import '../../components/MenuModal.dart';
+import '../../context/AuthContext.dart';
+import '../../../services/kot_print_service.dart';
 
-class OwnerSetupPage extends StatefulWidget {
+class OwnerSetupPage extends ConsumerStatefulWidget {
   const OwnerSetupPage({super.key});
   @override
-  State<OwnerSetupPage> createState() => _OwnerSetupPageState();
+  ConsumerState<OwnerSetupPage> createState() => _OwnerSetupPageState();
 }
 
-class _OwnerSetupPageState extends State<OwnerSetupPage> {
+class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   Map<String, List<dynamic>> _areas = {};
   bool _isLoading = false;
@@ -345,6 +348,266 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
         );
       }
     }
+  }
+
+  Future<Map<String, dynamic>?> _getActiveOrderForTable(Map<String, dynamic> table) async {
+    final tableName = table['tableName']?.toString() ?? '';
+    var order = _orderByTable[tableName];
+
+    final orderId = table['currentOrderId']?.toString() ?? order?['_id']?.toString();
+    if (order == null && orderId != null && orderId.isNotEmpty) {
+      try {
+        final res = await apiFetch('/api/admin/orders/$orderId');
+        if (res is Map && res['order'] != null) {
+          order = Map<String, dynamic>.from(res['order']);
+        } else if (res is Map) {
+          order = Map<String, dynamic>.from(res);
+        }
+      } catch (e) {
+        debugPrint("Error fetching order by ID: $e");
+      }
+    }
+
+    if (order is Map<String, dynamic>) {
+      return order;
+    } else if (order is Map) {
+      return Map<String, dynamic>.from(order);
+    }
+    return null;
+  }
+
+  // TRIGGER 5: Reprint Full KOT from Table Card
+  Future<void> _reprintFullKOT(Map<String, dynamic> table) async {
+    try {
+      final order = await _getActiveOrderForTable(table);
+      if (order == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No active order found'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final items = (order['items'] is List) ? List<dynamic>.from(order['items']) : <dynamic>[];
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(
+        orderId: order['_id'].toString(),
+        items: items,
+        isAddOn: false,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Full KOT sent to printer ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Reprint failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // TRIGGER 6: Reprint New Items Only from Table Card
+  Future<void> _reprintNewItemsKOT(Map<String, dynamic> table) async {
+    try {
+      final order = await _getActiveOrderForTable(table);
+      if (order == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No active order found'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final lastAddedIds = (order['lastAddedItems'] is List)
+          ? List<dynamic>.from(order['lastAddedItems']).map((e) => e.toString()).toSet()
+          : <String>{};
+
+      final allItems = (order['items'] is List) ? List<dynamic>.from(order['items']) : <dynamic>[];
+
+      final newItems = allItems.where((item) {
+        if (item is! Map) return false;
+        final rawItem = item['item'];
+        final itemId = (rawItem is Map) ? rawItem['_id']?.toString() : rawItem?.toString();
+        return itemId != null && lastAddedIds.contains(itemId);
+      }).toList();
+
+      if (newItems.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No recently added items found'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(
+        orderId: order['_id'].toString(),
+        items: newItems,
+        isAddOn: true,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('New items KOT sent to printer ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Reprint failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showReprintKOTOptions(Map<String, dynamic> table) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 24.h),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(10.r),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Icon(
+                        LucideIcons.zap,
+                        color: const Color(0xFFD97706),
+                        size: 20.sp,
+                      ),
+                    ),
+                    SizedBox(width: 12.w),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Reprint KOT — Table ${table['tableName']}',
+                          style: TextStyle(
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                        SizedBox(height: 2.h),
+                        Text(
+                          'Select print ticket mode',
+                          style: TextStyle(
+                            fontSize: 11.sp,
+                            color: Colors.grey.shade500,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                SizedBox(height: 20.h),
+                // Option 1: Full KOT
+                ListTile(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16.r),
+                    side: BorderSide(color: Colors.grey.shade200),
+                  ),
+                  leading: Container(
+                    padding: EdgeInsets.all(10.r),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Icon(LucideIcons.printer, size: 20.sp, color: const Color(0xFF334155)),
+                  ),
+                  title: Text(
+                    'Full KOT',
+                    style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    'All items',
+                    style: TextStyle(fontSize: 11.sp, color: Colors.grey.shade600),
+                  ),
+                  trailing: Icon(LucideIcons.chevronRight, size: 18.sp, color: Colors.grey),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _reprintFullKOT(table);
+                  },
+                ),
+                SizedBox(height: 12.h),
+                // Option 2: New Items Only
+                ListTile(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16.r),
+                    side: BorderSide(color: Colors.grey.shade200),
+                  ),
+                  leading: Container(
+                    padding: EdgeInsets.all(10.r),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF5ED),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Icon(LucideIcons.sparkles, size: 20.sp, color: const Color(0xFFFF5C00)),
+                  ),
+                  title: Text(
+                    'New Items Only',
+                    style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    'Recently added',
+                    style: TextStyle(fontSize: 11.sp, color: Colors.grey.shade600),
+                  ),
+                  trailing: Icon(LucideIcons.chevronRight, size: 18.sp, color: Colors.grey),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _reprintNewItemsKOT(table);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _handleShowBillPreview(Map<String, dynamic> table) async {
@@ -1536,6 +1799,10 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
 
   @override
   Widget build(BuildContext context) {
+    final user = ref.watch(authProvider).user;
+    final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+    final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8FAFB),
@@ -1576,16 +1843,33 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                             ],
                           ),
                         ),
-                        ElevatedButton.icon(
-                          onPressed: () => context.go('/dashboard/pos'),
-                          icon: Icon(LucideIcons.plus, size: 18.sp),
-                          label: Text('ADD NEW TABLES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.sp)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFFF5C00),
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.h),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                          ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              onPressed: () => context.go('/dashboard/settings'),
+                              icon: Icon(LucideIcons.printer, size: 18.sp, color: const Color(0xFF475569)),
+                              tooltip: 'Printer Settings',
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                side: BorderSide(color: Colors.grey.shade200),
+                                padding: EdgeInsets.all(14.r),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                              ),
+                            ),
+                            SizedBox(width: 12.w),
+                            ElevatedButton.icon(
+                              onPressed: () => context.go('/dashboard/pos'),
+                              icon: Icon(LucideIcons.plus, size: 18.sp),
+                              label: Text('ADD NEW TABLES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.sp)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFF5C00),
+                                foregroundColor: Colors.white,
+                                padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                              ),
+                            ),
+                          ],
                         )
                       ],
                     );
@@ -1751,6 +2035,12 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                                           const Color(0xFFFF5C00),
                                           () => _handleShowBillPreview(table),
                                         ),
+                                        if (autoPrintKOT)
+                                          _buildActionBtn(
+                                            LucideIcons.zap,
+                                            const Color(0xFFF59E0B),
+                                            () => _showReprintKOTOptions(table),
+                                          ),
                                         _buildActionBtn(
                                           LucideIcons.moveHorizontal,
                                           Colors.blue,

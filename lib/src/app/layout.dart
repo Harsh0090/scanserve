@@ -23,6 +23,8 @@ import 'dashboard/createmanager/page.dart';
 import 'dashboard/createbranch/page.dart';
 import 'dashboard/IncreaseBranchLimit/page.dart';
 import 'dashboard/payment_setup/page.dart';
+import 'dashboard/settings/page.dart';
+import 'dashboard/profile/page.dart';
 import 'public/RestaurantMenuPage.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
@@ -135,6 +137,14 @@ final GoRouter _router = GoRouter(
         GoRoute(
           path: '/dashboard/payment-setup',
           builder: (context, state) => const PaymentSetupPage(),
+        ),
+        GoRoute(
+          path: '/dashboard/settings',
+          builder: (context, state) => const SettingsPage(),
+        ),
+        GoRoute(
+          path: '/dashboard/profile',
+          builder: (context, state) => const ProfilePage(),
         ),
       ],
     ),
