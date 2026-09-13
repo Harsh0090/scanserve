@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../utils/apiClient.dart';
 
+import 'bluetooth_printer_service.dart';
+
 /// Single item within a KOT order
 class OrderItem {
   final dynamic item; // String _id or Map with {_id, branchName, branchPrice}
@@ -43,17 +45,27 @@ class OrderItem {
 /// Service handling KOT printing, Bill printing, and Printer Settings
 class KotPrintService {
   final Dio _dio;
+  final BluetoothPrinterService _btService;
 
-  KotPrintService({Dio? dio}) : _dio = dio ?? dioClient;
+  KotPrintService({Dio? dio, BluetoothPrinterService? btService})
+      : _dio = dio ?? dioClient,
+        _btService = btService ?? BluetoothPrinterService();
 
   /// Core print function for Kitchen Order Ticket
   ///
   /// Filters out items where [skipKitchen == true]. If no kitchen items remain,
-  /// returns early without calling the backend.
+  /// returns early without calling any print service.
+  ///
+  /// Checks for configured Bluetooth printer first (direct zero-dependency print).
+  /// If no Bluetooth printer is configured or direct print fails, falls back
+  /// seamlessly to backend PrintNode API.
   Future<void> printKOT({
     required String orderId,
     required List<dynamic> items,
     bool isAddOn = false,
+    String? tableNumber,
+    String? customerName,
+    String? restaurantName,
   }) async {
     // Step 1: Normalize items and filter out skipKitchen == true
     final List<Map<String, dynamic>> kitchenItems = [];
@@ -79,11 +91,35 @@ class KotPrintService {
       return; // Nothing to print
     }
 
+    // Step 2: Try Direct Bluetooth Thermal Print first
+    final hasBt = await _btService.hasConfiguredPrinter();
+    if (hasBt) {
+      debugPrint("🖨️ KotPrintService: Attempting Direct Bluetooth KOT print for order $orderId...");
+      try {
+        final btSuccess = await _btService.printKOTDirect(
+          orderId: orderId,
+          items: kitchenItems,
+          isAddOn: isAddOn,
+          tableNumber: tableNumber,
+          customerName: customerName,
+          restaurantName: restaurantName,
+        );
+        if (btSuccess) {
+          debugPrint("✅ KotPrintService: Direct Bluetooth KOT printed successfully.");
+          return;
+        } else {
+          debugPrint("⚠️ KotPrintService: Direct Bluetooth print unsuccessful, falling back to backend...");
+        }
+      } catch (e) {
+        debugPrint("⚠️ KotPrintService: Bluetooth print error ($e), falling back to backend...");
+      }
+    }
+
     debugPrint(
-      "🖨️ KotPrintService: Sending KOT print for order $orderId (${kitchenItems.length} items, isAddOn: $isAddOn)...",
+      "🖨️ KotPrintService: Sending KOT print to backend for order $orderId (${kitchenItems.length} items, isAddOn: $isAddOn)...",
     );
 
-    // Step 2: Call backend API
+    // Step 3: Call backend API (PrintNode fallback)
     try {
       final response = await _dio.post(
         '/api/print/kot',
@@ -101,7 +137,7 @@ class KotPrintService {
         throw Exception(message);
       }
 
-      debugPrint("✅ KotPrintService: KOT printed successfully.");
+      debugPrint("✅ KotPrintService: Backend KOT printed successfully.");
     } on DioException catch (e) {
       final serverMsg = e.response?.data is Map
           ? e.response?.data['message']
@@ -113,8 +149,22 @@ class KotPrintService {
     }
   }
 
-  /// Print customer receipt/bill via backend PrintNode integration
+  /// Print customer receipt/bill
   Future<void> printBill({required Map<String, dynamic> bill}) async {
+    // Try Direct Bluetooth Print first
+    final hasBt = await _btService.hasConfiguredPrinter();
+    if (hasBt) {
+      try {
+        final btSuccess = await _btService.printBillDirect(bill);
+        if (btSuccess) {
+          debugPrint("✅ KotPrintService: Direct Bluetooth Bill printed successfully.");
+          return;
+        }
+      } catch (e) {
+        debugPrint("⚠️ Direct Bluetooth bill print error ($e), falling back to backend...");
+      }
+    }
+
     try {
       final response = await _dio.post(
         '/api/print/bill',
@@ -128,7 +178,7 @@ class KotPrintService {
         throw Exception(message);
       }
 
-      debugPrint("✅ KotPrintService: Bill printed successfully.");
+      debugPrint("✅ KotPrintService: Bill printed successfully via backend.");
     } on DioException catch (e) {
       final serverMsg = e.response?.data is Map
           ? e.response?.data['message']
@@ -205,5 +255,6 @@ class KotPrintService {
 
 /// Riverpod Provider for KotPrintService
 final kotPrintServiceProvider = Provider<KotPrintService>((ref) {
-  return KotPrintService();
+  final btService = ref.watch(bluetoothPrinterServiceProvider);
+  return KotPrintService(btService: btService);
 });

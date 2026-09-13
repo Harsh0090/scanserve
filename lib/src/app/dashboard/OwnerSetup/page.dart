@@ -393,11 +393,19 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
       }
 
       final items = (order['items'] is List) ? List<dynamic>.from(order['items']) : <dynamic>[];
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+      final tableNum = table['tableName']?.toString() ?? order['tableNumber']?.toString();
+      final custName = order['customerName']?.toString();
+
       final kotService = ref.read(kotPrintServiceProvider);
       await kotService.printKOT(
         orderId: order['_id'].toString(),
         items: items,
         isAddOn: false,
+        tableNumber: tableNum,
+        customerName: custName,
+        restaurantName: restName?.toString(),
       );
 
       if (mounted) {
@@ -461,11 +469,19 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
         return;
       }
 
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+      final tableNum = table['tableName']?.toString() ?? order['tableNumber']?.toString();
+      final custName = order['customerName']?.toString();
+
       final kotService = ref.read(kotPrintServiceProvider);
       await kotService.printKOT(
         orderId: order['_id'].toString(),
         items: newItems,
         isAddOn: true,
+        tableNumber: tableNum,
+        customerName: custName,
+        restaurantName: restName?.toString(),
       );
 
       if (mounted) {

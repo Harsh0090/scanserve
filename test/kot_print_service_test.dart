@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ScanServe/src/services/kot_print_service.dart';
+import 'package:ScanServe/src/services/bluetooth_printer_service.dart';
 
 class MockHttpClientAdapter implements HttpClientAdapter {
   RequestOptions? lastRequest;
@@ -27,13 +29,44 @@ class MockHttpClientAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+class MockBluetoothPrinterService extends BluetoothPrinterService {
+  bool isPrintKOTCalled = false;
+  bool isPrintBillCalled = false;
+  bool hasConfigured = false;
+
+  @override
+  Future<bool> hasConfiguredPrinter() async => hasConfigured;
+
+  @override
+  Future<bool> printKOTDirect({
+    required String orderId,
+    required List<dynamic> items,
+    bool isAddOn = false,
+    String? tableNumber,
+    String? customerName,
+    String? restaurantName,
+  }) async {
+    isPrintKOTCalled = true;
+    return true;
+  }
+
+  @override
+  Future<bool> printBillDirect(Map<String, dynamic> bill) async {
+    isPrintBillCalled = true;
+    return true;
+  }
+}
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('KotPrintService Tests', () {
     late Dio dio;
     late MockHttpClientAdapter mockAdapter;
     late KotPrintService service;
 
     setUp(() {
+      SharedPreferences.setMockInitialValues({});
       dio = Dio(BaseOptions(baseUrl: 'https://scanserve.in'));
       mockAdapter = MockHttpClientAdapter();
       dio.httpClientAdapter = mockAdapter;
@@ -139,6 +172,52 @@ void main() {
       expect(data['autoPrintKOT'], false);
       expect(data['autoPrintBill'], true);
       expect(data['printNodePrinterId'], 101);
+    });
+
+    test('printKOT prints directly via Bluetooth when configured (zero 3rd party backend call)', () async {
+      final mockBt = MockBluetoothPrinterService();
+      mockBt.hasConfigured = true;
+      final btService = KotPrintService(dio: dio, btService: mockBt);
+
+      final items = [
+        {
+          'item': {'_id': 'item1', 'branchName': 'Biryani', 'branchPrice': 250},
+          'quantity': 2,
+          'skipKitchen': false,
+        }
+      ];
+
+      await btService.printKOT(
+        orderId: 'bt123',
+        items: items,
+        tableNumber: 'Table 5',
+        customerName: 'Aman',
+        restaurantName: 'The Spice House',
+      );
+
+      expect(mockBt.isPrintKOTCalled, isTrue);
+      // Ensure backend API was NOT called because direct Bluetooth handled it!
+      expect(mockAdapter.lastRequest, isNull);
+    });
+
+    test('printBill prints directly via Bluetooth when configured', () async {
+      final mockBt = MockBluetoothPrinterService();
+      mockBt.hasConfigured = true;
+      final btService = KotPrintService(dio: dio, btService: mockBt);
+
+      final bill = {
+        'restaurantName': 'The Spice House',
+        'tableNumber': 'Table 5',
+        'items': [
+          {'name': 'Biryani', 'quantity': 2, 'basePrice': 250}
+        ],
+        'total': 500,
+      };
+
+      await btService.printBill(bill: bill);
+
+      expect(mockBt.isPrintBillCalled, isTrue);
+      expect(mockAdapter.lastRequest, isNull);
     });
   });
 }

@@ -162,7 +162,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
           final items = (newOrder['items'] is List) ? List<dynamic>.from(newOrder['items']) : <dynamic>[];
           if (liveOrderKOT) {
-            _silentPrintKOT(orderId, items, false);
+            _silentPrintKOT(newOrder, items, false);
           } else if (autoPrintKOT) {
             _showKOTToast(newOrder, items, false);
           }
@@ -245,10 +245,23 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     );
   }
 
-  Future<void> _silentPrintKOT(String orderId, List<dynamic> items, bool isAddOn) async {
+  Future<void> _silentPrintKOT(dynamic order, List<dynamic> items, bool isAddOn) async {
     try {
+      final orderId = (order is Map ? order['_id'] : order)?.toString() ?? '';
+      final tableNumber = (order is Map ? order['tableNumber'] ?? order['tableName'] : null)?.toString();
+      final customerName = (order is Map ? order['customerName'] : null)?.toString();
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+
       final kotService = ref.read(kotPrintServiceProvider);
-      await kotService.printKOT(orderId: orderId, items: items, isAddOn: isAddOn);
+      await kotService.printKOT(
+        orderId: orderId,
+        items: items,
+        isAddOn: isAddOn,
+        tableNumber: tableNumber,
+        customerName: customerName,
+        restaurantName: restName?.toString(),
+      );
     } catch (e) {
       debugPrint("❌ Silent KOT print failed: $e");
     }
@@ -256,9 +269,21 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
   Future<void> _printKOT(dynamic order, List<dynamic> itemsToShow, bool isAddOn) async {
     try {
-      final orderId = order['_id']?.toString() ?? '';
+      final orderId = (order is Map ? order['_id'] : order)?.toString() ?? '';
+      final tableNumber = (order is Map ? order['tableNumber'] ?? order['tableName'] : null)?.toString();
+      final customerName = (order is Map ? order['customerName'] : null)?.toString();
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+
       final kotService = ref.read(kotPrintServiceProvider);
-      await kotService.printKOT(orderId: orderId, items: itemsToShow, isAddOn: isAddOn);
+      await kotService.printKOT(
+        orderId: orderId,
+        items: itemsToShow,
+        isAddOn: isAddOn,
+        tableNumber: tableNumber,
+        customerName: customerName,
+        restaurantName: restName?.toString(),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -733,7 +758,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                 : <dynamic>[]);
 
         if (liveOrderKOT) {
-          _silentPrintKOT(updatedOrder['_id'].toString(), items, false);
+          _silentPrintKOT(updatedOrder, items, false);
         } else if (autoPrintKOT) {
           _showKOTToast(updatedOrder, items, false);
         }
@@ -892,7 +917,6 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         total += (price * qty);
       }
     }
-    final isPending = order['paymentStatus'] == 'PENDING';
 
     return Container(
       decoration: BoxDecoration(

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import '../../../services/bluetooth_printer_service.dart';
 import '../../../services/kot_print_service.dart';
 import '../../context/AuthContext.dart';
 
@@ -27,10 +29,35 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   List<Map<String, dynamic>> _availablePrinters = [];
   String? _printerError;
 
+  // Direct Bluetooth Thermal Printer state
+  bool _isBtConnected = false;
+  String _savedBtName = '';
+  String _savedBtMac = '';
+  String _savedPaperSize = '58';
+  bool _isBtScanning = false;
+  bool _isBtConnecting = false;
+  bool _isPrintingTest = false;
+  List<BluetoothInfo> _pairedBtDevices = [];
+
   @override
   void initState() {
     super.initState();
     _initSettingsFromUser();
+    _initBluetoothSettings();
+  }
+
+  Future<void> _initBluetoothSettings() async {
+    final btService = ref.read(bluetoothPrinterServiceProvider);
+    final connected = await btService.isConnected();
+    final saved = await btService.getSavedPrinter();
+    if (mounted) {
+      setState(() {
+        _isBtConnected = connected;
+        _savedBtMac = saved['mac'] ?? '';
+        _savedBtName = saved['name'] ?? '';
+        _savedPaperSize = saved['paperSize'] ?? '58';
+      });
+    }
   }
 
   void _initSettingsFromUser() {
@@ -222,6 +249,143 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     }
   }
 
+  Future<void> _scanBluetoothPrinters() async {
+    final btService = ref.read(bluetoothPrinterServiceProvider);
+    final enabled = await btService.isBluetoothEnabled();
+    if (!enabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please enable Bluetooth on your phone/device first.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isBtScanning = true);
+    try {
+      final devices = await btService.getPairedDevices();
+      if (mounted) {
+        setState(() => _pairedBtDevices = devices);
+        if (devices.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No paired Bluetooth devices found. Please pair your CPENSUS printer in Android Bluetooth Settings first.',
+              ),
+              backgroundColor: Colors.blueGrey,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error scanning Bluetooth: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isBtScanning = false);
+    }
+  }
+
+  Future<void> _connectBluetoothPrinter(BluetoothInfo device) async {
+    setState(() => _isBtConnecting = true);
+    try {
+      final btService = ref.read(bluetoothPrinterServiceProvider);
+      final ok = await btService.connect(
+        device.macAdress,
+        printerName: device.name.isNotEmpty ? device.name : 'Thermal Printer',
+      );
+      if (ok) {
+        await _initBluetoothSettings();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Connected to ${device.name.isNotEmpty ? device.name : device.macAdress}! Direct printing is ready.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Could not connect to ${device.name}. Ensure printer is turned on and in range.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connection failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isBtConnecting = false);
+    }
+  }
+
+  Future<void> _disconnectBluetoothPrinter() async {
+    final btService = ref.read(bluetoothPrinterServiceProvider);
+    await btService.clearSavedPrinter();
+    await _initBluetoothSettings();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Disconnected Bluetooth printer.'),
+          backgroundColor: Colors.grey,
+        ),
+      );
+    }
+  }
+
+  Future<void> _printTestTicket() async {
+    setState(() => _isPrintingTest = true);
+    try {
+      final btService = ref.read(bluetoothPrinterServiceProvider);
+      final ok = await btService.printTestTicket();
+      if (mounted) {
+        if (ok) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Test ticket printed successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to print test ticket. Check printer connection.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Print error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPrintingTest = false);
+    }
+  }
+
+  Future<void> _setPaperSize(String size) async {
+    final btService = ref.read(bluetoothPrinterServiceProvider);
+    await btService.setPaperSize(size);
+    setState(() => _savedPaperSize = size);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Listen to auth changes and keep settings in sync if updated externally
@@ -354,6 +518,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ],
                   ),
                 ),
+                SizedBox(height: 36.h),
+
+                // DIRECT BLUETOOTH THERMAL PRINTER CARD
+                _buildBluetoothPrinterCard(),
                 SizedBox(height: 36.h),
 
                 // PRINTER DETECTION SECTION
@@ -686,6 +854,369 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildBluetoothPrinterCard() {
+    return Container(
+      padding: EdgeInsets.all(24.r),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24.r),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(5),
+            blurRadius: 16.r,
+            offset: Offset(0, 4.h),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(10.r),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Icon(
+                      LucideIcons.bluetooth,
+                      color: const Color(0xFF2563EB),
+                      size: 22.sp,
+                    ),
+                  ),
+                  SizedBox(width: 12.w),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Direct Bluetooth Thermal Printer',
+                            style: TextStyle(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF0F172A),
+                            ),
+                          ),
+                          SizedBox(width: 8.w),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCFCE7),
+                              borderRadius: BorderRadius.circular(6.r),
+                            ),
+                            child: Text(
+                              'ZERO 3RD PARTY',
+                              style: TextStyle(
+                                fontSize: 9.sp,
+                                fontWeight: FontWeight.bold,
+                                color: const Color(0xFF166534),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 2.h),
+                      Text(
+                        'Direct wireless print to CPENSUS POS-58 or any ESC/POS thermal printer',
+                        style: TextStyle(
+                          fontSize: 11.sp,
+                          color: const Color(0xFF64748B),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              ElevatedButton.icon(
+                onPressed: _isBtScanning ? null : _scanBluetoothPrinters,
+                icon: _isBtScanning
+                    ? SizedBox(
+                        width: 14.r,
+                        height: 14.r,
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(LucideIcons.scan, size: 16.sp),
+                label: Text(
+                  _isBtScanning ? 'Scanning...' : 'Scan Bluetooth',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12.sp,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 20.h),
+
+          // Current Connection Banner
+          if (_savedBtMac.isNotEmpty)
+            Container(
+              padding: EdgeInsets.all(16.r),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(16.r),
+                border: Border.all(color: const Color(0xFFBBF7D0)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8.r),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFDCFCE7),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      LucideIcons.printer,
+                      color: const Color(0xFF16A34A),
+                      size: 20.sp,
+                    ),
+                  ),
+                  SizedBox(width: 12.w),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              _savedBtName.isNotEmpty ? _savedBtName : 'CPENSUS Thermal Printer',
+                              style: TextStyle(
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.bold,
+                                color: const Color(0xFF14532D),
+                              ),
+                            ),
+                            SizedBox(width: 8.w),
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF16A34A),
+                                borderRadius: BorderRadius.circular(4.r),
+                              ),
+                              child: Text(
+                                _isBtConnected ? 'CONNECTED' : 'ACTIVE',
+                                style: const TextStyle(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 2.h),
+                        Text(
+                          'MAC: $_savedBtMac • ${_savedPaperSize}mm Roll',
+                          style: TextStyle(
+                            fontSize: 11.sp,
+                            color: const Color(0xFF15803D),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _isPrintingTest ? null : _printTestTicket,
+                    icon: _isPrintingTest
+                        ? SizedBox(
+                            width: 12.r,
+                            height: 12.r,
+                            child: const CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(LucideIcons.fileText, size: 14.sp),
+                    label: Text(
+                      _isPrintingTest ? 'Printing...' : 'Test Print',
+                      style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF16A34A),
+                      side: const BorderSide(color: Color(0xFF86EFAC)),
+                      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10.r),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 8.w),
+                  IconButton(
+                    tooltip: 'Disconnect Printer',
+                    icon: Icon(LucideIcons.trash2, color: Colors.red.shade400, size: 18.sp),
+                    onPressed: _disconnectBluetoothPrinter,
+                  ),
+                ],
+              ),
+            )
+          else
+            Container(
+              padding: EdgeInsets.all(16.r),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(16.r),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Row(
+                children: [
+                  Icon(LucideIcons.bluetoothSearching, color: const Color(0xFF94A3B8), size: 20.sp),
+                  SizedBox(width: 12.w),
+                  Expanded(
+                    child: Text(
+                      'No Bluetooth thermal printer selected. Tap "Scan Bluetooth" to discover paired printers (e.g. CPENSUS).',
+                      style: TextStyle(fontSize: 12.sp, color: const Color(0xFF64748B)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          SizedBox(height: 16.h),
+
+          // Paper Size Selector
+          Row(
+            children: [
+              Text(
+                'Paper Roll Width:',
+                style: TextStyle(
+                  fontSize: 12.sp,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF334155),
+                ),
+              ),
+              SizedBox(width: 12.w),
+              ChoiceChip(
+                label: Text('58mm (CPENSUS)', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600)),
+                selected: _savedPaperSize == '58',
+                selectedColor: const Color(0xFFDBEAFE),
+                onSelected: (val) {
+                  if (val) _setPaperSize('58');
+                },
+              ),
+              SizedBox(width: 8.w),
+              ChoiceChip(
+                label: Text('80mm (Wide)', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600)),
+                selected: _savedPaperSize == '80',
+                selectedColor: const Color(0xFFDBEAFE),
+                onSelected: (val) {
+                  if (val) _setPaperSize('80');
+                },
+              ),
+            ],
+          ),
+
+          // Paired Devices List
+          if (_pairedBtDevices.isNotEmpty) ...[
+            SizedBox(height: 20.h),
+            Divider(color: Colors.grey.shade100),
+            SizedBox(height: 8.h),
+            Text(
+              'Paired Bluetooth Devices (${_pairedBtDevices.length})',
+              style: TextStyle(
+                fontSize: 13.sp,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF0F172A),
+              ),
+            ),
+            SizedBox(height: 12.h),
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _pairedBtDevices.length,
+              separatorBuilder: (context, index) => SizedBox(height: 8.h),
+              itemBuilder: (context, idx) {
+                final device = _pairedBtDevices[idx];
+                final isSelected = device.macAdress == _savedBtMac;
+                return Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                  decoration: BoxDecoration(
+                    color: isSelected ? const Color(0xFFF0FDF4) : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14.r),
+                    border: Border.all(
+                      color: isSelected ? const Color(0xFF86EFAC) : const Color(0xFFE2E8F0),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            LucideIcons.printer,
+                            size: 18.sp,
+                            color: isSelected ? const Color(0xFF16A34A) : const Color(0xFF64748B),
+                          ),
+                          SizedBox(width: 12.w),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                device.name.isNotEmpty ? device.name : 'Unknown Device',
+                                style: TextStyle(
+                                  fontSize: 13.sp,
+                                  fontWeight: FontWeight.bold,
+                                  color: const Color(0xFF0F172A),
+                                ),
+                              ),
+                              Text(
+                                device.macAdress,
+                                style: TextStyle(fontSize: 11.sp, color: const Color(0xFF94A3B8)),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      if (isSelected)
+                        Text(
+                          'Connected',
+                          style: TextStyle(
+                            fontSize: 12.sp,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF16A34A),
+                          ),
+                        )
+                      else
+                        ElevatedButton(
+                          onPressed: _isBtConnecting ? null : () => _connectBluetoothPrinter(device),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0F172A),
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10.r),
+                            ),
+                          ),
+                          child: Text(
+                            'Connect',
+                            style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ],
       ),
     );
   }

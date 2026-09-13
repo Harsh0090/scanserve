@@ -11,6 +11,7 @@
         "cupertino_icons",
         "dio",
         "dio_cookie_manager",
+        "esc_pos_utils_plus",
         "firebase_core",
         "firebase_messaging",
         "fl_chart",
@@ -22,6 +23,7 @@
         "image_picker",
         "lucide_icons_flutter",
         "path_provider",
+        "print_bluetooth_thermal",
         "shared_preferences",
         "socket_io_client",
         "url_launcher"
@@ -62,6 +64,26 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "esc_pos_utils_plus",
+      "version": "2.0.4",
+      "dependencies": [
+        "flutter",
+        "html",
+        "image"
+      ]
+    },
+    {
+      "name": "print_bluetooth_thermal",
+      "version": "1.2.1",
+      "dependencies": [
+        "flutter",
+        "flutter_web_plugins",
+        "image",
+        "plugin_platform_interface",
+        "win_ble"
       ]
     },
     {
@@ -348,6 +370,43 @@
         "stream_channel",
         "string_scanner",
         "term_glyph"
+      ]
+    },
+    {
+      "name": "html",
+      "version": "0.15.7",
+      "dependencies": [
+        "csslib",
+        "source_span"
+      ]
+    },
+    {
+      "name": "image",
+      "version": "4.10.0",
+      "dependencies": [
+        "archive"
+      ]
+    },
+    {
+      "name": "win_ble",
+      "version": "1.1.1",
+      "dependencies": [
+        "flutter",
+        "path_provider"
+      ]
+    },
+    {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
+      "name": "flutter_web_plugins",
+      "version": "0.0.0",
+      "dependencies": [
+        "flutter"
       ]
     },
     {
@@ -736,13 +795,6 @@
       ]
     },
     {
-      "name": "flutter_web_plugins",
-      "version": "0.0.0",
-      "dependencies": [
-        "flutter"
-      ]
-    },
-    {
       "name": "sky_engine",
       "version": "0.0.0",
       "dependencies": []
@@ -758,13 +810,6 @@
       "name": "characters",
       "version": "1.4.1",
       "dependencies": []
-    },
-    {
-      "name": "plugin_platform_interface",
-      "version": "2.1.8",
-      "dependencies": [
-        "meta"
-      ]
     },
     {
       "name": "platform",
@@ -818,6 +863,21 @@
       "dependencies": [
         "source_span",
         "string_scanner"
+      ]
+    },
+    {
+      "name": "csslib",
+      "version": "1.0.2",
+      "dependencies": [
+        "source_span"
+      ]
+    },
+    {
+      "name": "archive",
+      "version": "4.3.0",
+      "dependencies": [
+        "path",
+        "posix"
       ]
     },
     {
@@ -975,6 +1035,15 @@
       "name": "vm_service",
       "version": "15.0.2",
       "dependencies": []
+    },
+    {
+      "name": "posix",
+      "version": "6.5.2",
+      "dependencies": [
+        "ffi",
+        "meta",
+        "path"
+      ]
     },
     {
       "name": "petitparser",
