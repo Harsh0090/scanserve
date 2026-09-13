@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -6,16 +7,19 @@ import 'package:dio/dio.dart';
 import 'dart:math' as math;
 import '../../../utils/apiClient.dart';
 import '../../components/MenuModal.dart';
+import '../../context/AuthContext.dart';
+import '../../../services/kot_print_service.dart';
 
-class OwnerSetupPage extends StatefulWidget {
+class OwnerSetupPage extends ConsumerStatefulWidget {
   const OwnerSetupPage({super.key});
   @override
-  State<OwnerSetupPage> createState() => _OwnerSetupPageState();
+  ConsumerState<OwnerSetupPage> createState() => _OwnerSetupPageState();
 }
 
-class _OwnerSetupPageState extends State<OwnerSetupPage> {
+class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   Map<String, List<dynamic>> _areas = {};
+  List<String> _areaOrder = [];
   bool _isLoading = false;
   Map<String, dynamic>? _selectedTable;
 
@@ -39,6 +43,7 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
   void initState() {
     super.initState();
     _fetchTables();
+    _fetchAreaOrder();
   }
 
   Future<void> _fetchTables() async {
@@ -98,6 +103,126 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
     }
   }
 
+  Future<void> _fetchAreaOrder() async {
+    try {
+      final data = await apiFetch('/api/pos/area-order');
+      if (data is List) {
+        final List<String> list = [];
+        for (var item in data) {
+          if (item is Map && item['areaName'] != null) {
+            list.add(item['areaName'].toString());
+          } else if (item is String) {
+            list.add(item);
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _areaOrder = list;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Failed to fetch area order: $e");
+    }
+  }
+
+  List<String> _getSortedAreaNames() {
+    final allAreas = _areas.keys.toList();
+    final ordered = _areaOrder.where((name) => allAreas.contains(name)).toList();
+    final unordered = allAreas.where((name) => !_areaOrder.contains(name)).toList();
+    return [...ordered, ...unordered];
+  }
+
+  Future<void> _moveArea(String areaName, String direction) async {
+    final current = _getSortedAreaNames();
+    final idx = current.indexOf(areaName);
+    if (idx == -1) return;
+    final swapIdx = direction == 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= current.length) return;
+
+    final newOrder = List<String>.from(current);
+    final temp = newOrder[idx];
+    newOrder[idx] = newOrder[swapIdx];
+    newOrder[swapIdx] = temp;
+
+    setState(() {
+      _areaOrder = newOrder;
+    });
+
+    try {
+      await apiFetch(
+        '/api/pos/area-order',
+        method: 'POST',
+        data: {'orderedAreaNames': newOrder},
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save area order: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      _fetchAreaOrder();
+    }
+  }
+
+  String _formatCardLabel(Map<String, dynamic> table) {
+    final area = (table['areaName'] ?? '').toString().trim();
+    final name = (table['displayLabel'] ?? table['tableName'] ?? '').toString().trim();
+    if (name.isEmpty) return area;
+    if (area.isEmpty) return name;
+    if (name.toLowerCase().startsWith(area.toLowerCase())) {
+      return name;
+    }
+    return '$area $name';
+  }
+
+  Widget _buildReorderArrows(String areaName, int index, int totalCount) {
+    final canMoveUp = index > 0;
+    final canMoveDown = index < totalCount - 1;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          onTap: canMoveUp ? () => _moveArea(areaName, 'up') : null,
+          borderRadius: BorderRadius.circular(4.r),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 2.h),
+            child: Text(
+              '▲',
+              style: TextStyle(
+                fontSize: 10.sp,
+                height: 1.0,
+                fontWeight: FontWeight.bold,
+                color: canMoveUp ? const Color(0xFF94A3B8) : const Color(0xFFE2E8F0),
+              ),
+            ),
+          ),
+        ),
+        SizedBox(height: 1.h),
+        InkWell(
+          onTap: canMoveDown ? () => _moveArea(areaName, 'down') : null,
+          borderRadius: BorderRadius.circular(4.r),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 2.h),
+            child: Text(
+              '▼',
+              style: TextStyle(
+                fontSize: 10.sp,
+                height: 1.0,
+                fontWeight: FontWeight.bold,
+                color: canMoveDown ? const Color(0xFF64748B) : const Color(0xFFE2E8F0),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   double _getTableTotal(Map<String, dynamic> table) {
     final order = _orderByTable[table['tableName'].toString()];
     if (order == null || order['items'] == null) return 0.0;
@@ -110,32 +235,6 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
       sum += price.toDouble() * qty.toDouble();
     }
     return sum;
-  }
-
-  String _formatTableLabel(Map<String, dynamic> table) {
-    final areaName = (table['areaName'] ?? '').toString();
-    final tableName = (table['tableName'] ?? '').toString();
-    final displayLabel = table['displayLabel']?.toString();
-    
-    String label = displayLabel ?? tableName;
-    
-    String cleanArea = areaName.trim().replaceAll(' ', '');
-    if (cleanArea.endsWith('-')) {
-      cleanArea = cleanArea.substring(0, cleanArea.length - 1).trim();
-    }
-    
-    String cleanLabel = label.trim().replaceAll(' ', '');
-    
-    if (cleanLabel.toLowerCase().startsWith(cleanArea.toLowerCase())) {
-      if (cleanLabel.contains('-') || cleanLabel.toLowerCase() == cleanArea.toLowerCase()) {
-        return cleanLabel.toLowerCase();
-      } else {
-        final suffix = cleanLabel.substring(cleanArea.length);
-        return "${cleanArea}-${suffix}".toLowerCase();
-      }
-    }
-    
-    return "${cleanArea}-${cleanLabel}".toLowerCase();
   }
 
   int? _getMinutesAgo(Map<String, dynamic> table) {
@@ -173,13 +272,42 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
   }
 
   void _showShiftModal(Map<String, dynamic> table) {
+    final currentTableNum = table['tableName']?.toString() ?? '';
+    final currentArea = (table['areaName'] ?? '').toString();
+    final currentLabel = (table['displayLabel'] ?? table['tableName']).toString();
+
     setState(() {
       _shiftData = {
         'orderId': table['currentOrderId'],
         'currentTable': table['tableName'],
+        'currentAreaName': currentArea,
       };
       _newTableNumInput = "";
       _showMergeConfirm = false;
+    });
+
+    final List<DropdownMenuItem<String>> dropdownItems = [];
+    _areas.forEach((areaName, tableList) {
+      for (var t in tableList) {
+        if (t['tableName']?.toString() == currentTableNum) continue;
+        final id = (t['_id'] ?? t['tableName']).toString();
+        final disp = (t['displayLabel'] ?? t['tableName']).toString();
+        final isRunning = t['status'] == 'Running';
+        dropdownItems.add(
+          DropdownMenuItem<String>(
+            value: id,
+            child: Text(
+              '$areaName $disp${isRunning ? " (Occupied)" : ""}',
+              style: TextStyle(
+                fontSize: 13.sp,
+                fontWeight: FontWeight.bold,
+                color: isRunning ? const Color(0xFFFF5C00) : const Color(0xFF0F172A),
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        );
+      }
     });
 
     showDialog(
@@ -206,17 +334,22 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                     ],
                   ),
                   SizedBox(height: 16.h),
-                  Text('Moving order from Table ${_shiftData?['currentTable']} to:', style: TextStyle(fontSize: 14.sp, color: Colors.grey.shade600)),
+                  Text('Moving order from $currentArea $currentLabel to:', style: TextStyle(fontSize: 14.sp, color: Colors.grey.shade600)),
                   SizedBox(height: 12.h),
-                  TextField(
+                  DropdownButtonFormField<String>(
+                    value: _newTableNumInput.isEmpty ? null : _newTableNumInput,
+                    hint: Text('Select table...', style: TextStyle(fontSize: 13.sp, color: Colors.grey)),
+                    isExpanded: true,
+                    items: dropdownItems,
                     onChanged: (v) {
-                      _newTableNumInput = v;
+                      setDialogState(() {
+                        _newTableNumInput = v ?? '';
+                      });
                     },
-                    style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.bold),
                     decoration: InputDecoration(
-                      hintText: 'New table number...',
                       filled: true,
                       fillColor: const Color(0xFFF8FAFB),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                       enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey.shade200, width: 2), borderRadius: BorderRadius.circular(12.r)),
                       focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: Color(0xFFFF5C00), width: 2), borderRadius: BorderRadius.circular(12.r)),
                     ),
@@ -229,8 +362,9 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                         backgroundColor: const Color(0xFFFF5C00),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
                         padding: EdgeInsets.symmetric(vertical: 14.h),
+                        disabledBackgroundColor: Colors.grey.shade300,
                       ),
-                      onPressed: () => _handleShiftConfirm(ctx, setDialogState, false),
+                      onPressed: _newTableNumInput.isEmpty ? null : () => _handleShiftConfirm(ctx, setDialogState, false),
                       child: Text('CONFIRM SHIFT', style: TextStyle(color: Colors.white, fontSize: 13.sp, fontWeight: FontWeight.bold)),
                     ),
                   ),
@@ -248,7 +382,7 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                         Text('Table Already Occupied!', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18.sp, color: const Color(0xFF0F172A))),
                         SizedBox(height: 8.h),
                         Text(
-                          'Table $_newTableNumInput is currently running.\nDo you want to merge Table ${_shiftData?['currentTable']} into Table $_newTableNumInput?',
+                          'Selected table is currently running.\nDo you want to merge Table ${_shiftData?['currentTable']} into it?',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 13.sp, color: Colors.grey.shade600, height: 1.4),
                         ),
@@ -261,11 +395,11 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                     decoration: BoxDecoration(color: const Color(0xFFF8FAFB), borderRadius: BorderRadius.circular(16.r)),
                     child: Column(
                       children: [
-                        _buildMergeBullet('All items from Table ${_shiftData?['currentTable']} will move to Table $_newTableNumInput'),
+                        _buildMergeBullet('All items from the current table will move to the target table'),
                         SizedBox(height: 8.h),
                         _buildMergeBullet('Bills will be combined into one'),
                         SizedBox(height: 8.h),
-                        _buildMergeBullet('Table ${_shiftData?['currentTable']} will become vacant'),
+                        _buildMergeBullet('Current table will become vacant'),
                       ],
                     ),
                   ),
@@ -328,6 +462,7 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
       final response = await dioClient.patch(
         '/api/admin/orders/${_shiftData?['orderId']}/shift',
         data: {
+          'newTableId': _newTableNumInput,
           'newTableNumber': _newTableNumInput,
           'mergeConfirmed': mergeConfirmed,
         },
@@ -371,6 +506,282 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
         );
       }
     }
+  }
+
+  Future<Map<String, dynamic>?> _getActiveOrderForTable(Map<String, dynamic> table) async {
+    final tableName = table['tableName']?.toString() ?? '';
+    var order = _orderByTable[tableName];
+
+    final orderId = table['currentOrderId']?.toString() ?? order?['_id']?.toString();
+    if (order == null && orderId != null && orderId.isNotEmpty) {
+      try {
+        final res = await apiFetch('/api/admin/orders/$orderId');
+        if (res is Map && res['order'] != null) {
+          order = Map<String, dynamic>.from(res['order']);
+        } else if (res is Map) {
+          order = Map<String, dynamic>.from(res);
+        }
+      } catch (e) {
+        debugPrint("Error fetching order by ID: $e");
+      }
+    }
+
+    if (order is Map<String, dynamic>) {
+      return order;
+    } else if (order is Map) {
+      return Map<String, dynamic>.from(order);
+    }
+    return null;
+  }
+
+  // TRIGGER 5: Reprint Full KOT from Table Card
+  Future<void> _reprintFullKOT(Map<String, dynamic> table) async {
+    try {
+      final order = await _getActiveOrderForTable(table);
+      if (order == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No active order found'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final items = (order['items'] is List) ? List<dynamic>.from(order['items']) : <dynamic>[];
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+      final tableNum = table['tableName']?.toString() ?? order['tableNumber']?.toString();
+      final custName = order['customerName']?.toString();
+
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(
+        orderId: order['_id'].toString(),
+        items: items,
+        isAddOn: false,
+        tableNumber: tableNum,
+        customerName: custName,
+        restaurantName: restName?.toString(),
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Full KOT sent to printer ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Reprint failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // TRIGGER 6: Reprint New Items Only from Table Card
+  Future<void> _reprintNewItemsKOT(Map<String, dynamic> table) async {
+    try {
+      final order = await _getActiveOrderForTable(table);
+      if (order == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No active order found'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final lastAddedIds = (order['lastAddedItems'] is List)
+          ? List<dynamic>.from(order['lastAddedItems']).map((e) => e.toString()).toSet()
+          : <String>{};
+
+      final allItems = (order['items'] is List) ? List<dynamic>.from(order['items']) : <dynamic>[];
+
+      final newItems = allItems.where((item) {
+        if (item is! Map) return false;
+        final rawItem = item['item'];
+        final itemId = (rawItem is Map) ? rawItem['_id']?.toString() : rawItem?.toString();
+        return itemId != null && lastAddedIds.contains(itemId);
+      }).toList();
+
+      if (newItems.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No recently added items found'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+      final tableNum = table['tableName']?.toString() ?? order['tableNumber']?.toString();
+      final custName = order['customerName']?.toString();
+
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printKOT(
+        orderId: order['_id'].toString(),
+        items: newItems,
+        isAddOn: true,
+        tableNumber: tableNum,
+        customerName: custName,
+        restaurantName: restName?.toString(),
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('New items KOT sent to printer ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Reprint failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showReprintKOTOptions(Map<String, dynamic> table) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 24.h),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(10.r),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Icon(
+                        LucideIcons.zap,
+                        color: const Color(0xFFD97706),
+                        size: 20.sp,
+                      ),
+                    ),
+                    SizedBox(width: 12.w),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Reprint KOT — Table ${table['tableName']}',
+                          style: TextStyle(
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                        SizedBox(height: 2.h),
+                        Text(
+                          'Select print ticket mode',
+                          style: TextStyle(
+                            fontSize: 11.sp,
+                            color: Colors.grey.shade500,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                SizedBox(height: 20.h),
+                // Option 1: Full KOT
+                ListTile(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16.r),
+                    side: BorderSide(color: Colors.grey.shade200),
+                  ),
+                  leading: Container(
+                    padding: EdgeInsets.all(10.r),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Icon(LucideIcons.printer, size: 20.sp, color: const Color(0xFF334155)),
+                  ),
+                  title: Text(
+                    'Full KOT',
+                    style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    'All items',
+                    style: TextStyle(fontSize: 11.sp, color: Colors.grey.shade600),
+                  ),
+                  trailing: Icon(LucideIcons.chevronRight, size: 18.sp, color: Colors.grey),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _reprintFullKOT(table);
+                  },
+                ),
+                SizedBox(height: 12.h),
+                // Option 2: New Items Only
+                ListTile(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16.r),
+                    side: BorderSide(color: Colors.grey.shade200),
+                  ),
+                  leading: Container(
+                    padding: EdgeInsets.all(10.r),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF5ED),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Icon(LucideIcons.sparkles, size: 20.sp, color: const Color(0xFFFF5C00)),
+                  ),
+                  title: Text(
+                    'New Items Only',
+                    style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    'Recently added',
+                    style: TextStyle(fontSize: 11.sp, color: Colors.grey.shade600),
+                  ),
+                  trailing: Icon(LucideIcons.chevronRight, size: 18.sp, color: Colors.grey),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _reprintNewItemsKOT(table);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _handleShowBillPreview(Map<String, dynamic> table) async {
@@ -762,43 +1173,76 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                           // Action Buttons
                           Padding(
                             padding: EdgeInsets.only(left: 24.w, right: 24.w, bottom: 24.h),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    style: OutlinedButton.styleFrom(
-                                      side: BorderSide(color: Colors.grey.shade200),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                                      padding: EdgeInsets.symmetric(vertical: 16.h),
+                            child: Builder(
+                              builder: (context) {
+                                final user = ref.read(authProvider).user;
+                                final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+                                final bool autoPrintBill = userData['autoPrintBill'] == true;
+
+                                return Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          side: BorderSide(color: Colors.grey.shade200),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                          padding: EdgeInsets.symmetric(vertical: 16.h),
+                                        ),
+                                        onPressed: () {
+                                          Navigator.pop(ctx);
+                                        },
+                                        child: Text('Close', style: TextStyle(color: Colors.grey.shade700, fontSize: 13.sp, fontWeight: FontWeight.bold)),
+                                      ),
                                     ),
-                                    onPressed: () {
-                                      Navigator.pop(ctx);
-                                    },
-                                    child: Text('Close', style: TextStyle(color: Colors.grey.shade700, fontSize: 14.sp, fontWeight: FontWeight.bold)),
-                                  ),
-                                ),
-                                SizedBox(width: 12.w),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFFFF5C00),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                                      padding: EdgeInsets.symmetric(vertical: 16.h),
-                                      disabledBackgroundColor: Colors.grey.shade300,
-                                      elevation: 0,
+                                    SizedBox(width: 12.w),
+                                    Expanded(
+                                      flex: autoPrintBill ? 1 : 2,
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: autoPrintBill ? Colors.grey.shade100 : const Color(0xFFFF5C00),
+                                          foregroundColor: autoPrintBill ? Colors.grey.shade800 : Colors.white,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                          padding: EdgeInsets.symmetric(vertical: 16.h),
+                                          disabledBackgroundColor: Colors.grey.shade300,
+                                          elevation: autoPrintBill ? 0 : 2,
+                                        ),
+                                        onPressed: (_selectedPaymentMethod == null || _isFinalizingBill) 
+                                            ? null 
+                                            : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: false),
+                                        icon: _isFinalizingBill 
+                                            ? const SizedBox.shrink()
+                                            : Icon(LucideIcons.receipt, size: 16.sp, color: autoPrintBill ? Colors.grey.shade700 : Colors.white),
+                                        label: _isFinalizingBill 
+                                            ? SizedBox(width: 18.r, height: 18.r, child: CircularProgressIndicator(color: autoPrintBill ? Colors.grey : Colors.white, strokeWidth: 2))
+                                            : Text('Mark Paid', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w900)),
+                                      ),
                                     ),
-                                    onPressed: (_selectedPaymentMethod == null || _isFinalizingBill) 
-                                        ? null 
-                                        : () => _finalizeBillWithPayment(ctx, setDialogState),
-                                    icon: _isFinalizingBill 
-                                        ? const SizedBox.shrink()
-                                        : Icon(LucideIcons.receipt, size: 16.sp, color: Colors.white),
-                                    label: _isFinalizingBill 
-                                        ? SizedBox(width: 18.r, height: 18.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                        : Text('Confirm & Serve', style: TextStyle(color: Colors.white, fontSize: 14.sp, fontWeight: FontWeight.w900)),
-                                  ),
-                                ),
-                              ],
+                                    if (autoPrintBill) ...[
+                                      SizedBox(width: 12.w),
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFFFF5C00),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                            padding: EdgeInsets.symmetric(vertical: 16.h),
+                                            disabledBackgroundColor: Colors.grey.shade300,
+                                            elevation: 2,
+                                          ),
+                                          onPressed: (_selectedPaymentMethod == null || _isFinalizingBill) 
+                                              ? null 
+                                              : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: true),
+                                          icon: _isFinalizingBill 
+                                              ? const SizedBox.shrink()
+                                              : Icon(LucideIcons.printer, size: 16.sp, color: Colors.white),
+                                          label: _isFinalizingBill 
+                                              ? SizedBox(width: 18.r, height: 18.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                              : Text('Print Bill', style: TextStyle(color: Colors.white, fontSize: 13.sp, fontWeight: FontWeight.w900)),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                );
+                              }
                             ),
                           ),
                         ],
@@ -900,7 +1344,7 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
     return {'discountAmount': 0.0, 'finalAmount': total.toDouble(), 'error': null};
   }
 
-  Future<void> _finalizeBillWithPayment(BuildContext dialogContext, StateSetter setDialogState) async {
+  Future<void> _finalizeBillWithPayment(BuildContext dialogContext, StateSetter setDialogState, {bool shouldPrint = true}) async {
     final orderId = _billPreview?['table']?['currentOrderId'];
     if (orderId == null) return;
     if (_selectedPaymentMethod == null) return;
@@ -929,21 +1373,32 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
         },
       );
       
-      await apiFetch(
-        '/api/admin/orders/$orderId/print-bill',
-        method: 'PATCH',
-      );
+      if (shouldPrint) {
+        await apiFetch(
+          '/api/admin/orders/$orderId/print-bill',
+          method: 'PATCH',
+        );
+      }
       
       Navigator.pop(dialogContext);
       _fetchTables();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Served & paid via $_selectedPaymentMethod'),
+            content: Text(
+              shouldPrint
+                  ? 'Served & paid via $_selectedPaymentMethod'
+                  : 'Marked paid via $_selectedPaymentMethod · Table cleared',
+            ),
             backgroundColor: Colors.green,
           ),
         );
       }
+      setState(() {
+        _selectedPaymentMethod = null;
+        _discountType = 'NONE';
+        _discountValue = '';
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1346,9 +1801,15 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                                             {'method': method1, 'amount': val1},
                                             {'method': method2, 'amount': val2},
                                           ],
+                                          'discountType': _discountType,
+                                          'discountValue': double.tryParse(_discountValue) ?? 0.0,
                                         },
                                       );
                                       Navigator.pop(ctx);
+                                      setState(() {
+                                        _discountType = 'NONE';
+                                        _discountValue = '';
+                                      });
                                       _fetchTables();
                                       if (mounted) {
                                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1560,8 +2021,132 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
     );
   }
 
+  void _showPrinterSettingsModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final user = ref.watch(authProvider).user;
+            final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+            final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+            final bool autoPrintBill = userData['autoPrintBill'] == true;
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.all(24.r),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(10.r),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF5ED),
+                                borderRadius: BorderRadius.circular(12.r),
+                              ),
+                              child: Icon(LucideIcons.printer, color: const Color(0xFFFF5C00), size: 20.sp),
+                            ),
+                            SizedBox(width: 12.w),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Print Settings', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A))),
+                                SizedBox(height: 2.h),
+                                Text('Saves instantly on toggle', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.bold, color: Colors.grey.shade400)),
+                              ],
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          icon: Icon(LucideIcons.x, size: 18.sp, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 20.h),
+                    SwitchListTile.adaptive(
+                      title: Text('Auto Print KOT', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14.sp)),
+                      subtitle: Text('Kitchen ticket on every order', style: TextStyle(fontSize: 11.sp, color: Colors.grey)),
+                      value: autoPrintKOT,
+                      activeTrackColor: const Color(0xFFA7F3D0),
+                      activeThumbColor: const Color(0xFF10B981),
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (val) async {
+                        try {
+                          final kotService = ref.read(kotPrintServiceProvider);
+                          await kotService.updatePrinterSettings(autoPrintKOT: val);
+                          final updatedUser = Map<String, dynamic>.from(userData);
+                          updatedUser['autoPrintKOT'] = val;
+                          ref.read(authProvider.notifier).setUserData(updatedUser);
+                          setModalState(() {});
+                        } catch (e) {
+                          debugPrint('Error updating printer settings: $e');
+                        }
+                      },
+                    ),
+                    Divider(color: Colors.grey.shade100),
+                    SwitchListTile.adaptive(
+                      title: Text('Auto Print Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14.sp)),
+                      subtitle: Text('Customer receipt on checkout', style: TextStyle(fontSize: 11.sp, color: Colors.grey)),
+                      value: autoPrintBill,
+                      activeTrackColor: const Color(0xFFA7F3D0),
+                      activeThumbColor: const Color(0xFF10B981),
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (val) async {
+                        try {
+                          final kotService = ref.read(kotPrintServiceProvider);
+                          await kotService.updatePrinterSettings(autoPrintBill: val);
+                          final updatedUser = Map<String, dynamic>.from(userData);
+                          updatedUser['autoPrintBill'] = val;
+                          ref.read(authProvider.notifier).setUserData(updatedUser);
+                          setModalState(() {});
+                        } catch (e) {
+                          debugPrint('Error updating printer settings: $e');
+                        }
+                      },
+                    ),
+                    SizedBox(height: 16.h),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                          padding: EdgeInsets.symmetric(vertical: 14.h),
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          context.go('/dashboard/settings');
+                        },
+                        child: Text('More Printer Settings', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final user = ref.watch(authProvider).user;
+    final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+    final bool autoPrintKOT = userData['autoPrintKOT'] == true;
+    final bool autoPrintBill = userData['autoPrintBill'] == true;
+
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8FAFB),
@@ -1602,16 +2187,74 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                             ],
                           ),
                         ),
-                        ElevatedButton.icon(
-                          onPressed: () => context.go('/dashboard/pos'),
-                          icon: Icon(LucideIcons.plus, size: 18.sp),
-                          label: Text('ADD NEW TABLES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.sp)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFFF5C00),
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.h),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                          ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                IconButton(
+                                  onPressed: () => _showPrinterSettingsModal(context),
+                                  icon: Icon(
+                                    LucideIcons.printer,
+                                    size: 18.sp,
+                                    color: (autoPrintKOT || autoPrintBill)
+                                        ? const Color(0xFF059669)
+                                        : const Color(0xFF475569),
+                                  ),
+                                  tooltip: 'Printer Settings',
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: (autoPrintKOT || autoPrintBill)
+                                        ? const Color(0xFFECFDF5)
+                                        : Colors.white,
+                                    side: BorderSide(
+                                      color: (autoPrintKOT || autoPrintBill)
+                                          ? const Color(0xFFA7F3D0)
+                                          : Colors.grey.shade200,
+                                    ),
+                                    padding: EdgeInsets.all(14.r),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                  ),
+                                ),
+                                if (autoPrintKOT || autoPrintBill)
+                                  Positioned(
+                                    top: -4.h,
+                                    right: -4.w,
+                                    child: Container(
+                                      padding: EdgeInsets.all(4.r),
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF10B981),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      constraints: BoxConstraints(minWidth: 16.r, minHeight: 16.r),
+                                      child: Center(
+                                        child: Text(
+                                          '${(autoPrintKOT ? 1 : 0) + (autoPrintBill ? 1 : 0)}',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 9.sp,
+                                            fontWeight: FontWeight.w900,
+                                            height: 1.0,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            SizedBox(width: 12.w),
+                            ElevatedButton.icon(
+                              onPressed: () => context.go('/dashboard/pos'),
+                              icon: Icon(LucideIcons.plus, size: 18.sp),
+                              label: Text('ADD NEW TABLES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.sp)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFF5C00),
+                                foregroundColor: Colors.white,
+                                padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                              ),
+                            ),
+                          ],
                         )
                       ],
                     );
@@ -1623,7 +2266,12 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                 if (_isLoading && _areas.isEmpty) ...[
                   const SkeletonArea(),
                   const SkeletonArea(),
-                ] else ..._areas.entries.map((area) {
+                ] else ..._getSortedAreaNames().asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final areaName = entry.value;
+                  final tables = _areas[areaName] ?? [];
+                  final totalAreaCount = _getSortedAreaNames().length;
+
                   return Padding(
                     padding: EdgeInsets.only(bottom: 40.h),
                     child: Column(
@@ -1634,13 +2282,22 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                           children: [
                             Row(
                               children: [
-                                Container(padding: EdgeInsets.all(8.r), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8.r)), child: Icon(LucideIcons.layoutGrid, size: 18.sp, color: Colors.grey)),
+                                _buildReorderArrows(areaName, index, totalAreaCount),
+                                SizedBox(width: 8.w),
+                                Container(
+                                  padding: EdgeInsets.all(8.r),
+                                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8.r)),
+                                  child: Icon(LucideIcons.layoutGrid, size: 18.sp, color: Colors.grey),
+                                ),
                                 SizedBox(width: 12.w),
-                                Text('${area.key.toUpperCase()} (${area.value.length})', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.sp, letterSpacing: 2.w, color: const Color(0xFF0F172A)))
+                                Text(
+                                  '${areaName.toUpperCase()} (${tables.length})',
+                                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.sp, letterSpacing: 2.w, color: const Color(0xFF0F172A)),
+                                )
                               ],
                             ),
                             OutlinedButton.icon(
-                              onPressed: () => _showAdjustLayoutModal(area.key, area.value.length),
+                              onPressed: () => _showAdjustLayoutModal(areaName, tables.length),
                               icon: Icon(LucideIcons.settings, size: 14.sp),
                               label: Text('ADJUST', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold)),
                               style: OutlinedButton.styleFrom(
@@ -1661,9 +2318,9 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                             crossAxisSpacing: 16.w,
                             childAspectRatio: 1,
                           ),
-                          itemCount: area.value.length,
+                          itemCount: tables.length,
                           itemBuilder: (ctx, idx) {
-                            final table = area.value[idx];
+                            final table = tables[idx];
                             final isRunning = table['status'] == 'Running';
                             final double totalAmount = _getTableTotal(table);
                             final int? minutesAgo = _getMinutesAgo(table);
@@ -1725,12 +2382,18 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                                               color: isRunning ? Colors.white.withAlpha(100) : Colors.grey.shade300,
                                             ),
                                             SizedBox(height: 6.h),
-                                            Text(
-                                              _formatTableLabel(table),
-                                              style: TextStyle(
-                                                fontSize: 20.sp,
-                                                fontWeight: FontWeight.w900,
-                                                color: isRunning ? Colors.white : const Color(0xFF0F172A),
+                                            Padding(
+                                              padding: EdgeInsets.symmetric(horizontal: 8.w),
+                                              child: Text(
+                                                _formatCardLabel(table),
+                                                style: TextStyle(
+                                                  fontSize: 22.sp,
+                                                  fontWeight: FontWeight.w900,
+                                                  color: isRunning ? Colors.white : const Color(0xFF0F172A),
+                                                ),
+                                                textAlign: TextAlign.center,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
                                             SizedBox(height: 4.h),
@@ -1777,6 +2440,12 @@ class _OwnerSetupPageState extends State<OwnerSetupPage> {
                                           const Color(0xFFFF5C00),
                                           () => _handleShowBillPreview(table),
                                         ),
+                                        if (autoPrintKOT)
+                                          _buildActionBtn(
+                                            LucideIcons.zap,
+                                            const Color(0xFFF59E0B),
+                                            () => _showReprintKOTOptions(table),
+                                          ),
                                         _buildActionBtn(
                                           LucideIcons.moveHorizontal,
                                           Colors.blue,
