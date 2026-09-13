@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 class StatCard extends StatelessWidget {
   final String title;
@@ -31,12 +31,12 @@ class StatCard extends StatelessWidget {
         boxShadow: primary
             ? [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
+                  color: Colors.black.withValues(alpha: 0.08),
                   blurRadius: 24,
                   offset: const Offset(0, 8),
                 ),
               ]
-            : [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)],
+            : [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8)],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -129,3 +129,4 @@ class StatCard extends StatelessWidget {
     );
   }
 }
+

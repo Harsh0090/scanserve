@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
@@ -47,10 +47,11 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
         });
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to sync subscription data: $e')),
         );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -96,25 +97,30 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
 
       setState(() => _isActionLoading = true);
       try {
-        if (isRestaurantIncreased)
+        if (isRestaurantIncreased) {
           await _processUpgrade('RESTAURANT', _restaurantCount);
-        if (isFoodTruckIncreased)
+        }
+        if (isFoodTruckIncreased) {
           await _processUpgrade('FOOD_TRUCK', _foodTruckCount);
+        }
       } catch (e) {
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Expansion action failed')),
           );
+        }
       } finally {
         if (mounted) setState(() => _isActionLoading = false);
       }
       return;
     }
 
-    if (isRestaurantIncreased)
+    if (isRestaurantIncreased) {
       await _processUpgrade('RESTAURANT', _restaurantCount);
-    if (isFoodTruckIncreased)
+    }
+    if (isFoodTruckIncreased) {
       await _processUpgrade('FOOD_TRUCK', _foodTruckCount);
+    }
   }
 
   Future<void> _processSubscriptionActivation() async {
@@ -141,10 +147,11 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
         );
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Activation failed: $e')));
+      }
     }
   }
 
@@ -186,10 +193,11 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
         );
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Upgrade failed: $e')));
+      }
     }
   }
 
@@ -1025,3 +1033,4 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
     );
   }
 }
+

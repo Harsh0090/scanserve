@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
@@ -227,21 +227,24 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
         setState(() {
           _rules.removeWhere((r) => r['_id'] == id);
         });
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('Rule removed')));
+        }
       } else {
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(res['message'] ?? 'Delete failed')),
           );
+        }
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Network error $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -585,10 +588,11 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
                                                   )
                                                   .toList(),
                                               onChanged: (v) {
-                                                if (v != null)
+                                                if (v != null) {
                                                   setState(
                                                     () => _triggerItem = v,
                                                   );
+                                                }
                                               },
                                             ),
                                           ),
@@ -669,10 +673,11 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
                                                   )
                                                   .toList(),
                                               onChanged: (v) {
-                                                if (v != null)
+                                                if (v != null) {
                                                   setState(
                                                     () => _suggestedItem = v,
                                                   );
+                                                }
                                               },
                                             ),
                                           ),
@@ -1051,13 +1056,14 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
   }
 
   Widget _buildGraph() {
-    if (_graphData.isEmpty)
+    if (_graphData.isEmpty) {
       return const Center(
         child: Text(
           "No Data",
           style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
         ),
       );
+    }
 
     final List<FlSpot> upsellSpots = [];
     double maxY = 0;
@@ -1069,13 +1075,14 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
       upsellSpots.add(FlSpot(i.toDouble(), upsell));
     }
 
-    if (maxY == 0)
+    if (maxY == 0) {
       return const Center(
         child: Text(
           "No Upsell Data for selected period",
           style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
         ),
       );
+    }
 
     return LineChart(
       LineChartData(
@@ -1102,7 +1109,7 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
                 if (val.toInt() >= 0 && val.toInt() < _graphData.length) {
                   final d = _graphData[val.toInt()]['date']?.toString() ?? '';
                   final parts = d.split('-');
-                  if (parts.length >= 3)
+                  if (parts.length >= 3) {
                     return Padding(
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
@@ -1114,6 +1121,7 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
                         ),
                       ),
                     );
+                  }
                 }
                 return const SizedBox.shrink();
               },

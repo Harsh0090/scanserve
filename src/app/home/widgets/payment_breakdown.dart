@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 class PaymentBreakdown extends StatelessWidget {
   final Map<String, dynamic> data;
@@ -118,7 +118,7 @@ class PaymentBreakdown extends StatelessWidget {
                           fontSize: 9.sp,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 1,
-                          color: (m['text'] as Color).withOpacity(0.7),
+                          color: (m['text'] as Color).withValues(alpha: 0.7),
                         ),
                       ),
                       SizedBox(height: 4.h),
@@ -135,7 +135,7 @@ class PaymentBreakdown extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 9.sp,
                           fontWeight: FontWeight.w900,
-                          color: (m['text'] as Color).withOpacity(0.5),
+                          color: (m['text'] as Color).withValues(alpha: 0.5),
                         ),
                       ),
                     ],

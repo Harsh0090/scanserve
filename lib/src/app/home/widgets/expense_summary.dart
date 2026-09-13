@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 class ExpenseSummary extends StatelessWidget {
   final Map<String, dynamic>? expense;
@@ -53,7 +53,7 @@ class ExpenseSummary extends StatelessWidget {
               Container(
                 padding: EdgeInsets.all(12.sp),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
+                  color: Colors.white.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(16.r),
                 ),
                 child: Icon(
@@ -71,14 +71,14 @@ class ExpenseSummary extends StatelessWidget {
                 'Revenue',
                 revenue,
                 Colors.white,
-                Colors.white.withOpacity(0.05),
+                Colors.white.withValues(alpha: 0.05),
               ),
               SizedBox(width: 8.w),
               _tile(
                 'Expenses',
                 total,
                 Colors.red.shade400,
-                Colors.red.withOpacity(0.1),
+                Colors.red.withValues(alpha: 0.1),
               ),
               SizedBox(width: 8.w),
               _tile(
@@ -86,8 +86,8 @@ class ExpenseSummary extends StatelessWidget {
                 netProfit.abs(),
                 netProfit >= 0 ? Colors.green.shade400 : Colors.red.shade400,
                 netProfit >= 0
-                    ? Colors.green.withOpacity(0.1)
-                    : Colors.red.withOpacity(0.1),
+                    ? Colors.green.withValues(alpha: 0.1)
+                    : Colors.red.withValues(alpha: 0.1),
               ),
             ],
           ),
@@ -122,7 +122,7 @@ class ExpenseSummary extends StatelessWidget {
             child: LinearProgressIndicator(
               value: (profitPct.abs() / 100).clamp(0.0, 1.0),
               minHeight: 8.h,
-              backgroundColor: Colors.white.withOpacity(0.05),
+              backgroundColor: Colors.white.withValues(alpha: 0.05),
               color: profitPct >= 0
                   ? Colors.green.shade500
                   : Colors.red.shade500,
@@ -150,7 +150,7 @@ class ExpenseSummary extends StatelessWidget {
                       vertical: 10.h,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.05),
+                      color: Colors.white.withValues(alpha: 0.05),
                       borderRadius: BorderRadius.circular(12.r),
                     ),
                     child: Row(
@@ -224,3 +224,4 @@ class ExpenseSummary extends StatelessWidget {
       .toStringAsFixed(0)
       .replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
 }
+

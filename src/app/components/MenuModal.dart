@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../context/AuthContext.dart';
@@ -45,6 +45,8 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _nameEnabled = false;
   String _customerName = "";
   String _customerPhone = "";
+  String? _paymentMode;
+  String? _paymentMethod;
 
   bool _postOrderModal = false;
   Map<String, dynamic>? _createdOrderRef;
@@ -228,8 +230,12 @@ class _MenuModalState extends ConsumerState<MenuModal> {
 
   int _totalItemQuantity() {
     int total = 0;
-    for (var item in _cart.values) total += item['quantity'] as int;
-    for (var item in _existingItems.values) total += item['quantity'] as int;
+    for (var item in _cart.values) {
+      total += item['quantity'] as int;
+    }
+    for (var item in _existingItems.values) {
+      total += item['quantity'] as int;
+    }
     return total;
   }
 
@@ -323,23 +329,20 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       if (_mode == 'quick') {
         payload['paymentMode'] = 'POSTPAID';
         payload['customerPhone'] = null;
-      }
-      if (_mode == 'restaurant') {
+        payload['customerName'] = 'Guest';
+      } else if (_mode == 'restaurant') {
         payload['tableNumber'] = widget.table?['tableName'] ?? 'NA';
         payload['customerPhone'] = 'NA';
         payload['paymentMode'] = 'POSTPAID';
         if (_nameEnabled) {
           payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
         }
-      }
-      if (_mode == 'quick' || _mode == 'foodtruck') {
-        payload['paymentMode'] = 'POSTPAID';
-        if (_nameEnabled) {
-          payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
-          payload['customerPhone'] = _customerPhone.trim().isEmpty ? null : _customerPhone.trim();
-        } else {
-          payload['customerName'] = 'Guest';
-          payload['customerPhone'] = null;
+      } else if (_mode == 'foodtruck') {
+        payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
+        payload['customerPhone'] = _customerPhone.trim().isEmpty ? null : _customerPhone.trim();
+        payload['paymentMode'] = _paymentMode;
+        if (_paymentMode == 'PREPAID') {
+          payload['paymentMethod'] = _paymentMethod;
         }
       }
 
@@ -357,13 +360,21 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       if (mounted) {
         if (widget.onOrderPlaced != null) widget.onOrderPlaced!(createdOrder);
 
-        if (_mode == 'foodtruck') {
-          setState(() {
-            _createdOrderRef = createdOrder;
-            _postOrderModal = true;
-            _isSubmitting = false;
-          });
-          return;
+        if (_mode == 'foodtruck' && _paymentMode == 'PREPAID' && _paymentMethod == 'UPI') {
+          try {
+            final qrRes = await apiFetch('/api/restaurants/payment');
+            if (qrRes['payment'] != null && qrRes['payment']['qrImageUrl'] != null) {
+              setState(() {
+                _qrData = qrRes['payment'];
+                _showQR = true;
+                _cart = {};
+                _isSubmitting = false;
+              });
+              return;
+            }
+          } catch (qrErr) {
+            debugPrint("Failed to fetch QR code settings: $qrErr");
+          }
         }
 
         setState(() => _cart = {});
@@ -435,6 +446,10 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _isSubmitDisabled() {
     if (_isSubmitting) return true;
     if (_isExistingOrder) return !_hasAnyChanges();
+    if (_mode == 'foodtruck' && widget.sendAppendOrder == null && widget.onCartConfirmed == null) {
+      if (_paymentMode == null) return true;
+      if (_paymentMode == 'PREPAID' && _paymentMethod == null) return true;
+    }
     return _cart.isEmpty;
   }
 
@@ -573,7 +588,89 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                   ),
                 ),
 
-                if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                if (_mode == 'foodtruck' && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFB),
+                      border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildInput('Customer Name', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
+                            ),
+                            SizedBox(width: 12.w),
+                            Expanded(
+                              child: _buildInput('Customer Phone', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 12.h),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildPaymentModeButton(
+                                label: 'PAID',
+                                isSelected: _paymentMode == 'PREPAID',
+                                selectedColor: Colors.green.shade600,
+                                onPressed: () => setState(() {
+                                  _paymentMode = 'PREPAID';
+                                  _paymentMethod = null;
+                                }),
+                              ),
+                            ),
+                            SizedBox(width: 12.w),
+                            Expanded(
+                              child: _buildPaymentModeButton(
+                                label: 'PAY LATER',
+                                isSelected: _paymentMode == 'POSTPAID',
+                                selectedColor: Colors.orange.shade600,
+                                onPressed: () => setState(() {
+                                  _paymentMode = 'POSTPAID';
+                                  _paymentMethod = null;
+                                }),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_paymentMode == 'PREPAID') ...[
+                          SizedBox(height: 12.h),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildPaymentMethodButton(
+                                  label: 'CASH',
+                                  isSelected: _paymentMethod == 'CASH',
+                                  onPressed: () => setState(() => _paymentMethod = 'CASH'),
+                                ),
+                              ),
+                              SizedBox(width: 8.w),
+                              Expanded(
+                                child: _buildPaymentMethodButton(
+                                  label: 'UPI',
+                                  isSelected: _paymentMethod == 'UPI',
+                                  onPressed: () => setState(() => _paymentMethod = 'UPI'),
+                                ),
+                              ),
+                              SizedBox(width: 8.w),
+                              Expanded(
+                                child: _buildPaymentMethodButton(
+                                  label: 'CARD',
+                                  isSelected: _paymentMethod == 'CARD',
+                                  onPressed: () => setState(() => _paymentMethod = 'CARD'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  )
+                else if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                     decoration: BoxDecoration(
@@ -761,7 +858,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.vertical(top: Radius.circular(32.r)),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 40)],
+                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 40)],
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -893,7 +990,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(22.r)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.14),
+                color: Colors.black.withValues(alpha: 0.14),
                 blurRadius: 32.r,
                 offset: Offset(0, -6.h),
               ),
@@ -1011,7 +1108,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   Widget _buildCartLine(Map<String, dynamic> item, bool isExisting) {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 14.h),
-      color: isExisting ? Colors.transparent : Colors.green.shade50.withOpacity(0.4),
+      color: isExisting ? Colors.transparent : Colors.green.shade50.withValues(alpha: 0.4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1140,7 +1237,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           backgroundColor: disabled ? Colors.grey.shade300 : Colors.deepOrange,
           foregroundColor: Colors.white,
           elevation: disabled ? 0 : 8,
-          shadowColor: Colors.deepOrange.withOpacity(0.4),
+          shadowColor: Colors.deepOrange.withValues(alpha: 0.4),
           padding: EdgeInsets.symmetric(vertical: 14.h),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12.r),
@@ -1153,6 +1250,64 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             fontWeight: FontWeight.w900,
             letterSpacing: 1,
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentModeButton({
+    required String label,
+    required bool isSelected,
+    required Color selectedColor,
+    required VoidCallback onPressed,
+  }) {
+    return ElevatedButton(
+      onPressed: onPressed,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isSelected ? selectedColor : Colors.white,
+        foregroundColor: isSelected ? Colors.white : Colors.grey.shade400,
+        elevation: isSelected ? 4 : 0,
+        shadowColor: selectedColor.withValues(alpha: 0.3),
+        padding: EdgeInsets.symmetric(vertical: 14.h),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.r),
+          side: isSelected ? BorderSide.none : BorderSide(color: Colors.grey.shade200, width: 1.5),
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12.sp,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentMethodButton({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onPressed,
+  }) {
+    return ElevatedButton(
+      onPressed: onPressed,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isSelected ? Colors.blue.shade600 : Colors.white,
+        foregroundColor: isSelected ? Colors.white : Colors.grey.shade700,
+        elevation: isSelected ? 2 : 0,
+        padding: EdgeInsets.symmetric(vertical: 10.h),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12.r),
+          side: isSelected ? BorderSide.none : BorderSide(color: Colors.grey.shade200),
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10.sp,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.5,
         ),
       ),
     );

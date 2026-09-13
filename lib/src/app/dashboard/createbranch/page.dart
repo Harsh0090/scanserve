@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import 'package:go_router/go_router.dart';
@@ -158,8 +158,9 @@ class _CreateBranchPageState extends ConsumerState<CreateBranchPage> {
                   children: [
                     LayoutBuilder(
                       builder: (ctx, constraints) {
-                        if (MediaQuery.of(context).size.width > 900.w)
+                        if (MediaQuery.of(context).size.width > 900.w) {
                           return const SizedBox.shrink();
+                        }
                         return Padding(
                           padding: EdgeInsets.only(right: 16.w),
                           child: IconButton(
@@ -241,8 +242,9 @@ class _CreateBranchPageState extends ConsumerState<CreateBranchPage> {
                 // Left Pane: Registry Form (Desktop)
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    if (MediaQuery.of(context).size.width <= 900.w)
+                    if (MediaQuery.of(context).size.width <= 900.w) {
                       return const SizedBox.shrink();
+                    }
                     return _buildFormPane();
                   },
                 ),
@@ -837,3 +839,4 @@ class _CreateBranchPageState extends ConsumerState<CreateBranchPage> {
     );
   }
 }
+

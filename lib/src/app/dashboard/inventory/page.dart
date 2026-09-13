@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
@@ -180,7 +180,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                       borderRadius: BorderRadius.circular(16.r),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFFFF5C00).withOpacity(0.3),
+                          color: const Color(0xFFFF5C00).withValues(alpha: 0.3),
                           blurRadius: 12.r,
                           offset: Offset(0, 6.h),
                         ),
@@ -316,7 +316,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
         borderRadius: BorderRadius.circular(20.r),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: Colors.black.withValues(alpha: 0.03),
             blurRadius: 10.r,
             offset: Offset(0, 4.h),
           ),
@@ -397,7 +397,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(24.r),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12.r, offset: Offset(0, 6.h)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 12.r, offset: Offset(0, 6.h)),
         ],
       ),
       clipBehavior: Clip.antiAlias,
@@ -578,3 +578,4 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     );
   }
 }
+

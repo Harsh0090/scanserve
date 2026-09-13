@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 
@@ -41,10 +41,11 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
         throw Exception(res['message'] ?? 'Failed to load branches');
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Network error $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -93,10 +94,11 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
         throw Exception(res['message'] ?? 'Assignment failed');
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Connection failed: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -119,7 +121,7 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text(
               'REMOVE',
-              style: const TextStyle(color: Colors.red),
+              style: TextStyle(color: Colors.red),
             ),
           ),
         ],
@@ -133,15 +135,17 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
         method: 'DELETE',
       );
       await _loadBranches();
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Manager access revoked successfully')),
         );
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Failed to revoke manager: $e')));
+      }
     }
   }
 
@@ -280,8 +284,9 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
                 // Left Pane: Registration Form (Desktop)
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    if (MediaQuery.of(context).size.width <= 900.w)
+                    if (MediaQuery.of(context).size.width <= 900.w) {
                       return const SizedBox.shrink();
+                    }
                     return _buildFormPane();
                   },
                 ),
@@ -808,3 +813,4 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
     );
   }
 }
+

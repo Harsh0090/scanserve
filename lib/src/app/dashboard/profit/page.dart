@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../../utils/apiClient.dart';
@@ -361,7 +361,7 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                                               children: [
                                                 Container(padding: EdgeInsets.all(8.r), decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8.r)), child: Icon(LucideIcons.receipt, color: Colors.green, size: 20.sp)),
                                                 SizedBox(width: 12.w),
-                                                Text('GST BREAKDOWN (${_selectedGstRate}%)', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A))),
+                                                Text('GST BREAKDOWN ($_selectedGstRate%)', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A))),
                                               ],
                                             ),
                                             Container(padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 4.h), decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(16.r)), child: Text('TAX COMPLIANT', style: TextStyle(color: Colors.white, fontSize: 9.sp, fontWeight: FontWeight.w900))),
@@ -453,7 +453,7 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                                       shrinkWrap: true,
                                       physics: const NeverScrollableScrollPhysics(),
                                       itemCount: _expenses.length,
-                                      separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade50),
+                                      separatorBuilder: (_, _) => Divider(height: 1, color: Colors.grey.shade50),
                                       itemBuilder: (ctx, idx) {
                                         final exp = _expenses[idx];
                                         return Padding(
@@ -758,7 +758,7 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                       ),
                     ),
                   )
-                ).toList(),
+                ),
                 SizedBox(height: 8.h),
                 SizedBox(
                   width: double.infinity,
@@ -775,3 +775,4 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
     );
   }
 }
+

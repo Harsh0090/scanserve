@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
@@ -120,6 +120,11 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
         user?['type'] == 'foodtruck' ||
         user?['data']?['businessType'] == 'FOOD_TRUCK' ||
         user?['data']?['type'] == 'foodtruck';
+    final isRestaurant =
+        user?['businessType'] == 'RESTAURANT' ||
+        user?['type'] == 'restaurant' ||
+        user?['data']?['businessType'] == 'RESTAURANT' ||
+        user?['data']?['type'] == 'restaurant';
 
     // Reactive: If user just loaded, initialize data
     if (user != null && _branches.isEmpty && _loadingBranches) {
@@ -422,7 +427,7 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
                   );
                 },
               ),
-              if (isFoodTruck) ...[
+              if (isFoodTruck || isRestaurant) ...[
                 SizedBox(height: 24.h),
                 LayoutBuilder(
                   builder: (ctx, constraints) {
@@ -864,3 +869,4 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
     );
   }
 }
+

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
@@ -36,24 +36,26 @@ class _TableGeneratorPageState extends ConsumerState<TableGeneratorPage> {
         method: 'POST',
         data: {
           'tableCount': countInt,
-          if (restaurantId != null) 'restaurantId': restaurantId,
+          'restaurantId': ?restaurantId,
         },
       );
       if (res['tables'] != null) {
         setState(() => _tables = res['tables']);
       } else {
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(res['message'] ?? 'Failed to generate QR codes'),
             ),
           );
+        }
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -434,3 +436,4 @@ class _TableGeneratorPageState extends ConsumerState<TableGeneratorPage> {
     );
   }
 }
+

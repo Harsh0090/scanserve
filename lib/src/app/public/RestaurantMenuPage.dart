@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -31,7 +31,7 @@ class _RestaurantMenuPageState extends State<RestaurantMenuPage>
   String? _activeCategory;
   String _searchQuery = '';
 
-  Map<String, dynamic> _cart = {};
+  final Map<String, dynamic> _cart = {};
   bool _businessTypeFoodTruck = false;
 
   bool _isReviewModalOpen = false;
@@ -44,7 +44,7 @@ class _RestaurantMenuPageState extends State<RestaurantMenuPage>
   bool _rememberMe = false;
   String? _orderId;
 
-  Map<String, dynamic> _upsellData = {};
+  final Map<String, dynamic> _upsellData = {};
   String? _activeUpsellId;
 
   late AnimationController _fadeController;

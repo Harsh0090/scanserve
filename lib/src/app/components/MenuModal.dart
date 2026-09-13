@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../context/AuthContext.dart';
@@ -228,8 +228,12 @@ class _MenuModalState extends ConsumerState<MenuModal> {
 
   int _totalItemQuantity() {
     int total = 0;
-    for (var item in _cart.values) total += item['quantity'] as int;
-    for (var item in _existingItems.values) total += item['quantity'] as int;
+    for (var item in _cart.values) {
+      total += item['quantity'] as int;
+    }
+    for (var item in _existingItems.values) {
+      total += item['quantity'] as int;
+    }
     return total;
   }
 
@@ -761,7 +765,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.vertical(top: Radius.circular(32.r)),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 40)],
+                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 40)],
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -893,7 +897,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(22.r)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.14),
+                color: Colors.black.withValues(alpha: 0.14),
                 blurRadius: 32.r,
                 offset: Offset(0, -6.h),
               ),
@@ -1011,7 +1015,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   Widget _buildCartLine(Map<String, dynamic> item, bool isExisting) {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 14.h),
-      color: isExisting ? Colors.transparent : Colors.green.shade50.withOpacity(0.4),
+      color: isExisting ? Colors.transparent : Colors.green.shade50.withValues(alpha: 0.4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1140,7 +1144,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           backgroundColor: disabled ? Colors.grey.shade300 : Colors.deepOrange,
           foregroundColor: Colors.white,
           elevation: disabled ? 0 : 8,
-          shadowColor: Colors.deepOrange.withOpacity(0.4),
+          shadowColor: Colors.deepOrange.withValues(alpha: 0.4),
           padding: EdgeInsets.symmetric(vertical: 14.h),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12.r),
@@ -1158,3 +1162,4 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     );
   }
 }
+

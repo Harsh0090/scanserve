@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -40,6 +40,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   String? _payLaterUpdating;
   String? _paymentUpdating;
   Map<String, dynamic>? _appendTarget;
+  final Set<String> _pendingCheckoutIds = {};
 
   IO.Socket? _socket;
 
@@ -111,7 +112,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
       setState(() {
         final orderId = newOrder['_id'];
-        final idx = _orders.indexWhere((o) => o is Map && o['_id'] == orderId);
+        final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId.toString());
         if (idx != -1) {
           if (newOrder['type'] == 'ITEM_ADDED') {
             final newItems = newOrder['newItems'];
@@ -134,6 +135,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             _orders[idx] = {..._orders[idx] as Map, ...newOrder};
           }
         } else {
+          final status = newOrder['status'];
+          if ((status == 'SERVED' || status == 'CANCELLED') && !_pendingCheckoutIds.contains(orderId.toString())) {
+            return;
+          }
           _showKOTToast(newOrder, newOrder['items'] ?? [], false);
           _orders.insert(0, newOrder);
         }
@@ -213,7 +218,25 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     setState(() => _isLoading = true);
     try {
       final data = await apiFetch('/api/admin/orders/live');
-      if (mounted && data is List) setState(() => _orders = data);
+      if (mounted && data is List) {
+        setState(() {
+          final pendingOrders = _orders
+              .where((o) =>
+                  o is Map &&
+                  _pendingCheckoutIds.contains(o['_id'].toString()))
+              .toList();
+
+          final newOrders = List<dynamic>.from(data);
+          for (var po in pendingOrders) {
+            final exists = newOrders.any((o) =>
+                o is Map && o['_id'].toString() == po['_id'].toString());
+            if (!exists) {
+              newOrders.add(po);
+            }
+          }
+          _orders = newOrders;
+        });
+      }
     } catch (e) {
       debugPrint("Live Orders Error: $e");
     } finally {
@@ -246,10 +269,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         );
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to fetch pay later orders: $e')),
         );
+      }
     }
   }
 
@@ -279,13 +303,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         );
       });
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Payment failed: $e'),
             backgroundColor: Colors.red,
           ),
         );
+      }
     } finally {
       if (mounted) setState(() => _paymentUpdating = null);
     }
@@ -302,7 +327,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         method: 'POST',
         data: {'orderId': order['_id'], 'payments': payments},
       );
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -312,13 +337,18 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             backgroundColor: Colors.green,
           ),
         );
-      setState(() => _splitTarget = null);
+      }
+      setState(() {
+        _pendingCheckoutIds.add(order['_id'].toString());
+        _splitTarget = null;
+      });
       await _fetchOrders();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
+      }
     } finally {
       if (mounted) setState(() => _splitLoading = false);
     }
@@ -328,11 +358,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     try {
       setState(() => _paymentUpdating = '${order['_id']}-$method');
       await apiFetch(
-        '/api/admin/orders/collect-payment',
-        method: 'PATCH',
+        '/api/orders/collect-early',
+        method: 'POST',
         data: {'orderId': order['_id'], 'paymentMethod': method},
       );
       if (mounted) {
+        setState(() {
+          _pendingCheckoutIds.add(order['_id'].toString());
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Payment collected via $method ✓'),
@@ -348,6 +381,39 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             content: Text('Failed: $e'),
             backgroundColor: Colors.red,
           ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _paymentUpdating = null);
+    }
+  }
+
+  Future<void> _handleCollectAndServe(dynamic order, String method) async {
+    try {
+      setState(() => _paymentUpdating = '${order['_id']}-$method');
+      await apiFetch(
+        '/api/admin/orders/${order['_id']}/status',
+        method: 'PATCH',
+        data: {'status': 'SERVED'},
+      );
+      await apiFetch(
+        '/api/admin/orders/collect-payment',
+        method: 'PATCH',
+        data: {'orderId': order['_id'], 'paymentMethod': method},
+      );
+      final autoPrintBill = ref.read(authProvider).user?['autoPrintBill'] == true ||
+          ref.read(authProvider).user?['data']?['autoPrintBill'] == true;
+      if (autoPrintBill) {
+        _printOrderBill(order);
+      }
+      setState(() {
+        _orders.removeWhere((o) => o['_id'].toString() == order['_id'].toString());
+      });
+      await _fetchOrders();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -389,7 +455,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         }
       });
       await _fetchPayLaterOrders();
-      if (mounted) {
+      final authState = ref.read(authProvider);
+      final isRestaurant = authState.user?['businessType'] == "RESTAURANT" || authState.user?['data']?['businessType'] == "RESTAURANT";
+      if (mounted && !isRestaurant) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -403,13 +471,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       }
       setState(() => _payLaterTarget = null);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to mark pay later: $e'),
             backgroundColor: Colors.red,
           ),
         );
+      }
     } finally {
       if (mounted) setState(() => _payLaterUpdating = null);
     }
@@ -491,19 +560,21 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
     try {
       await apiFetch('/api/admin/orders/$orderId/cancel', method: 'PATCH');
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Order Cancelled!'),
             backgroundColor: Colors.green,
           ),
         );
+      }
       _fetchOrders();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
+      }
     }
   }
 
@@ -520,20 +591,22 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         method: 'PATCH',
         data: {'newTableNumber': _newTableValue},
       );
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Table Shifted!')));
+      }
       setState(() {
         _shiftingOrder = null;
         _newTableValue = "";
       });
       _fetchOrders();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
+      }
     }
   }
 
@@ -541,27 +614,30 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     if (_paymentOrder == null) return;
     try {
       await apiFetch(
-        '/api/admin/orders/collect-payment',
-        method: 'PATCH',
+        '/api/orders/collect-early',
+        method: 'POST',
         data: {'orderId': _paymentOrder['_id'], 'paymentMethod': method},
       );
       setState(() {
+        _pendingCheckoutIds.add(_paymentOrder['_id'].toString());
         _paymentModal = false;
         _paymentOrder = null;
       });
       _fetchOrders();
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Payment Collected!')));
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Payment Failed: $e'),
             backgroundColor: Colors.red,
           ),
         );
+      }
     }
   }
 
@@ -575,13 +651,17 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       );
       if (nextStatus == 'SERVED') {
         _printOrderBill(order);
+        setState(() {
+          _pendingCheckoutIds.remove(order['_id'].toString());
+        });
       }
       await _fetchOrders();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
+      }
     } finally {
       if (mounted) setState(() => _statusUpdating = null);
     }
@@ -589,25 +669,29 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
   Future<void> _printOrderBill(dynamic order) async {
     try {
-      if (mounted)
+      final authState = ref.read(authProvider);
+      final isRestaurant = authState.user?['businessType'] == "RESTAURANT" || authState.user?['data']?['businessType'] == "RESTAURANT";
+      if (mounted && !isRestaurant) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Sending to printer...'),
             backgroundColor: Colors.green,
           ),
         );
+      }
       await apiFetch(
         '/api/admin/orders/${order['_id']}/print-bill',
         method: 'PATCH',
       );
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Printer Error: $e'),
             backgroundColor: Colors.red,
           ),
         );
+      }
     }
   }
 
@@ -639,6 +723,828 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     return list.take(4).toList();
   }
 
+  Widget _buildPaymentButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    bool isSplit = false,
+    bool isLoading = false,
+  }) {
+    final bgColor = isSplit ? Colors.purple.shade50 : Colors.grey.shade50;
+    final fgColor = isSplit ? Colors.purple.shade700 : Colors.grey.shade700;
+    final borderColor = isSplit ? Colors.purple.shade200 : Colors.grey.shade200;
+
+    return Expanded(
+      child: OutlinedButton(
+        onPressed: isLoading ? null : onPressed,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: bgColor,
+          foregroundColor: fgColor,
+          side: BorderSide(color: borderColor, width: 1.r),
+          padding: EdgeInsets.symmetric(vertical: 14.h),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12.r),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isLoading)
+              SizedBox(
+                width: 12.r,
+                height: 12.r,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.r,
+                  valueColor: AlwaysStoppedAnimation<Color>(fgColor),
+                ),
+              )
+            else ...[
+              Icon(icon, size: 14.sp),
+              SizedBox(width: 4.w),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 9.sp,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5.w,
+                ),
+              ),
+            ]
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOrderCard(BuildContext context, dynamic order, bool isFoodTruck, dynamic authState) {
+    final status = order['status']?.toString() ?? 'NEW';
+    final isRestaurant = authState.user?['businessType'] == "RESTAURANT" || authState.user?['data']?['businessType'] == "RESTAURANT";
+
+    double total = 0;
+    final items = order['items'] ?? [];
+    if (items is List) {
+      for (var i in items) {
+        if (i is! Map) continue;
+        final itemData = i['item'];
+        final price =
+            num.tryParse(
+              ((itemData is Map
+                          ? itemData['branchPrice']
+                          : null) ??
+                      i['basePrice'] ??
+                      0)
+                  .toString(),
+            ) ??
+            0;
+        final qty =
+            num.tryParse(
+              (i['quantity'] ?? 1).toString(),
+            ) ??
+            1;
+        total += (price * qty);
+      }
+    }
+    final isPending = order['paymentStatus'] == 'PENDING';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(40.r),
+        border: Border.all(
+          color: const Color(0xFFF1F5F9), // border-slate-100
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(5),
+            blurRadius: 10.r,
+            offset: Offset(0, 4.h),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Card Header
+          Padding(
+            padding: EdgeInsets.all(24.0.r),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Top Row: Time and Table Shift Icon
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.access_time,
+                          size: 14.sp,
+                          color: Colors.grey.shade500,
+                        ),
+                        SizedBox(width: 6.w),
+                        Text(
+                          DateTime.tryParse(order['createdAt'] ?? '')
+                                  ?.toLocal()
+                                  .toString()
+                                  .substring(11, 16) ??
+                              'Time',
+                          style: TextStyle(
+                            fontSize: 12.sp,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (!isFoodTruck && _activeFilter != 'SERVED')
+                      IconButton(
+                        icon: Icon(
+                          LucideIcons.arrowRight,
+                          size: 18.sp,
+                          color: Colors.grey.shade400,
+                        ),
+                        onPressed: () => setState(() {
+                          _shiftingOrder = order;
+                          _newTableValue = order['tableNumber']?.toString() ?? '';
+                        }),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                  ],
+                ),
+                SizedBox(height: 8.h),
+                // Middle Row: Guest Name / Table Number and View Details Link
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        isFoodTruck
+                            ? (order['customerName']?.toString() ?? 'Walk-in Guest')
+                            : 'Table ${order['tableNumber']?.toString() ?? 'NA'}',
+                        style: TextStyle(
+                          fontSize: 20.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF0F172A),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () => setState(() => _viewDetails = order),
+                      child: Text(
+                        'View Details',
+                        style: TextStyle(
+                          fontSize: 12.sp,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade500,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 4.h),
+                // Bottom Row: Order ID hash and Status Badge
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '#${(order['_id']?.toString() ?? '....').substring((order['_id']?.toString() ?? '....').length - 4).toUpperCase()}',
+                          style: TextStyle(
+                            fontSize: 12.sp,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                        SizedBox(width: 8.w),
+                        IconButton(
+                          icon: Icon(
+                            LucideIcons.trash2,
+                            size: 16.sp,
+                            color: Colors.red.shade300,
+                          ),
+                          onPressed: () => _cancelOrder(order['_id']),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ],
+                    ),
+                    // Status Badge (preserves the Cooking / Ready info dynamically)
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 2.h),
+                      decoration: BoxDecoration(
+                        color: status == 'PREPARING'
+                            ? Colors.orange.shade50
+                            : status == 'ACCEPTED'
+                            ? Colors.blue.shade50
+                            : status == 'READY'
+                            ? Colors.purple.shade50
+                            : status == 'SERVED'
+                            ? Colors.green.shade50
+                            : Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(12.r),
+                        border: Border.all(
+                          color: status == 'PREPARING'
+                              ? Colors.orange.shade100
+                              : status == 'ACCEPTED'
+                              ? Colors.blue.shade200
+                              : status == 'READY'
+                              ? Colors.purple.shade100
+                              : status == 'SERVED'
+                              ? Colors.green.shade100
+                              : Colors.blue.shade100,
+                        ),
+                      ),
+                      child: Text(
+                        status == 'PREPARING' ? 'COOKING' : status,
+                        style: TextStyle(
+                          fontSize: 8.sp,
+                          fontWeight: FontWeight.w900,
+                          color: status == 'PREPARING'
+                              ? Colors.orange
+                              : status == 'ACCEPTED'
+                              ? Colors.blue.shade600
+                              : status == 'READY'
+                              ? Colors.purple
+                              : status == 'SERVED'
+                              ? Colors.green
+                              : Colors.blue,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Items List
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 24.r, vertical: 12.r),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              border: Border.symmetric(
+                horizontal: BorderSide(
+                  color: Color(0xFFF1F5F9), // border-slate-100
+                ),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(), // remove scrollable
+                  padding: EdgeInsets.zero,
+                  itemCount: (items is List) ? items.length : 0,
+                  itemBuilder: (ctx, iIdx) {
+                    final item = items[iIdx];
+                    if (item is! Map) {
+                      return const SizedBox.shrink();
+                    }
+                    final itemData = item['item'];
+                    final itemName =
+                        (itemData is Map
+                            ? itemData['branchName']
+                            : null) ??
+                        item['name'] ??
+                        '';
+                    final itemPrice =
+                        num.tryParse(
+                          ((itemData is Map
+                                      ? itemData['branchPrice']
+                                      : null) ??
+                                  item['basePrice'] ??
+                                  0)
+                              .toString(),
+                        ) ??
+                        0;
+                    final qty =
+                        num.tryParse(
+                          (item['quantity'] ?? 1)
+                              .toString(),
+                        ) ??
+                        1;
+                    final price = itemPrice * qty;
+
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: 8.h,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 10.w,
+                              vertical: 6.h,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius:
+                                  BorderRadius.circular(
+                                    8.r,
+                                  ),
+                              border: Border.all(
+                                color: Colors.grey.shade200,
+                              ),
+                            ),
+                            child: Text(
+                              '${qty}x',
+                              style: TextStyle(
+                                fontSize: 13.sp,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 12.w),
+                          Expanded(
+                            child: Text(
+                              itemName,
+                              style: TextStyle(
+                                fontSize: 16.sp,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '₹$price',
+                            style: TextStyle(
+                              fontSize: 15.sp,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF0F172A),
+                            ),
+                          ),
+                          if (_activeFilter != 'SERVED' &&
+                              status != 'READY' &&
+                              status != 'SERVED' &&
+                              (items is List &&
+                                  items.length > 1)) ...[
+                            SizedBox(width: 8.w),
+                            IconButton(
+                              icon: Icon(
+                                Icons.close,
+                                size: 14.sp,
+                                color: Colors.grey.shade400,
+                              ),
+                              onPressed: () {
+                                _removeItemFromOrder(
+                                  order['_id'],
+                                  item['_id'],
+                                ).then((res) {
+                                  setState(() {
+                                    final updatedOrder =
+                                        (res is Map &&
+                                                res['order'] !=
+                                                    null)
+                                            ? res['order']
+                                            : res;
+                                    final idx =
+                                        _orders.indexWhere(
+                                      (o) =>
+                                          o is Map &&
+                                          o['_id'].toString() ==
+                                              order['_id'].toString(),
+                                    );
+                                    if (idx != -1) {
+                                      _orders[idx] = {
+                                        ..._orders[idx]
+                                            as Map,
+                                        'items':
+                                            updatedOrder[
+                                                'items'],
+                                        'estimatedTotal':
+                                            updatedOrder[
+                                                'estimatedTotal'],
+                                        'subTotal':
+                                            updatedOrder[
+                                                'subTotal'],
+                                      };
+                                    }
+                                  });
+                                  ScaffoldMessenger.of(
+                                    context,
+                                  ).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Item removed',
+                                      ),
+                                    ),
+                                  );
+                                }).catchError((err) {
+                                  ScaffoldMessenger.of(
+                                    context,
+                                  ).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Failed: $err',
+                                      ),
+                                    ),
+                                  );
+                                });
+                              },
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                Builder(
+                  builder: (context) {
+                    bool isServed = order['status'] == 'SERVED' && order['paymentStatus'] != 'PAY_LATER';
+                    if (!isServed && order['paymentStatus'] != 'PAY_LATER' && _activeFilter != 'SERVED') {
+                      return Padding(
+                        padding: EdgeInsets.only(top: 12.h),
+                        child: CustomPaint(
+                          painter: DashedRectPainter(
+                            color: Colors.grey.shade300,
+                            gap: 4.w,
+                            borderRadius: 12.r,
+                          ),
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _appendTarget = {
+                                  'currentOrderId': order['_id'],
+                                  'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}'
+                                };
+                              });
+                              _scaffoldKey.currentState?.openEndDrawer();
+                            },
+                            borderRadius: BorderRadius.circular(12.r),
+                            child: Container(
+                              width: double.infinity,
+                              padding: EdgeInsets.symmetric(vertical: 12.h),
+                              alignment: Alignment.center,
+                              child: Text(
+                                '+ ADD ITEMS',
+                                style: TextStyle(
+                                  fontSize: 10.sp,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.grey.shade500,
+                                  letterSpacing: 1.w,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          // Bottom Actions
+          Builder(
+            builder: (context) {
+              bool isPaid = (order['paymentMethod'] != null && order['paymentMethod'].toString().isNotEmpty) ||
+                  _pendingCheckoutIds.contains(order['_id'].toString());
+              bool isServed = order['status'] == 'SERVED' &&
+                  order['paymentStatus'] != 'PAY_LATER' &&
+                  !_pendingCheckoutIds.contains(order['_id'].toString());
+              
+              return Padding(
+                padding: EdgeInsets.all(24.0.r),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // TOTAL BILL section
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'TOTAL',
+                          style: TextStyle(
+                            fontSize: 10.sp,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.grey.shade400,
+                            letterSpacing: 2.w,
+                          ),
+                        ),
+                        Text(
+                          '₹$total',
+                          style: TextStyle(
+                            fontSize: 24.sp,
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 16.h),
+                    
+                    // PAY_LATER breakdown info (if applicable)
+                    if (order['paymentStatus'] == 'PAY_LATER' && order['paidAmount'] != null && (num.tryParse(order['paidAmount'].toString()) ?? 0) > 0) ...[
+                      Container(
+                        padding: EdgeInsets.all(12.r),
+                        margin: EdgeInsets.only(bottom: 16.h),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(16.r),
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text('PAID NOW', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.green)),
+                                Text('₹${order['paidAmount']}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: Colors.green)),
+                              ],
+                            ),
+                            Divider(height: 16.h, color: Colors.orange.shade200),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text('REMAINING', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
+                                Text('₹${order['remainingAmount']}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    // STATE 1: PAY_LATER tab collection
+                    if (_activeFilter == 'PAY_LATER') ...[
+                      Text(
+                        'COLLECT PAYMENT',
+                        style: TextStyle(
+                          fontSize: 9.sp,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.orange.shade600,
+                          letterSpacing: 2.w,
+                        ),
+                      ),
+                      SizedBox(height: 12.h),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _clearPayLaterPayment(order, 'CASH'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.amber.shade50,
+                                foregroundColor: Colors.amber.shade700,
+                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
+                                elevation: 0,
+                              ),
+                              child: Text(_paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                            ),
+                          ),
+                          SizedBox(width: 8.w),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _clearPayLaterPayment(order, 'UPI'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.amber.shade50,
+                                foregroundColor: Colors.amber.shade700,
+                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
+                                elevation: 0,
+                              ),
+                              child: Text(_paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                            ),
+                          ),
+                          SizedBox(width: 8.w),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => _clearPayLaterPayment(order, 'CARD'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.amber.shade50,
+                                foregroundColor: Colors.amber.shade700,
+                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
+                                elevation: 0,
+                              ),
+                              child: Text(_paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ]
+                    // STATE 2: PAID STATE (Image 2)
+                    else if (isPaid && !isServed) ...[
+                      if (isRestaurant)
+                        Container(
+                          width: double.infinity,
+                          padding: EdgeInsets.symmetric(vertical: 16.h),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(20.r),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '✓ PAID VIA ${order['paymentMethod']}',
+                              style: TextStyle(
+                                fontSize: 10.sp,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.green.shade700,
+                                letterSpacing: 1.w,
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 1,
+                              child: Container(
+                                padding: EdgeInsets.symmetric(vertical: 16.h),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.horizontal(left: Radius.circular(20.r)),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    '✓ PAID VIA ${order['paymentMethod']}',
+                                    style: TextStyle(
+                                      fontSize: 10.sp,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.green.shade700,
+                                      letterSpacing: 1.w,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 1,
+                              child: ElevatedButton(
+                                onPressed: () => _updateStatus(order, 'SERVED'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF10B981), // Emerald 500
+                                  padding: EdgeInsets.symmetric(vertical: 16.h),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.horizontal(right: Radius.circular(20.r)),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                child: Text(
+                                  _statusUpdating == order['_id'] ? 'WAIT...' : 'CHECKOUT',
+                                  style: TextStyle(
+                                    fontSize: 10.sp,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                    letterSpacing: 1.w,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ]
+                    // STATE 3: UNPAID STATE (Image 1)
+                    else if (!isPaid && !isServed) ...[
+                      if (!isFoodTruck && status == 'NEW') ...[
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: () => _updateStatus(order, 'ACCEPTED'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF0F172A),
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(vertical: 16.h),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12.r),
+                              ),
+                              elevation: 0,
+                            ),
+                            child: Text(
+                              _statusUpdating == order['_id'] ? '...' : 'ACCEPT',
+                              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w),
+                            ),
+                          ),
+                        ),
+                      ] else if (!isFoodTruck && status == 'ACCEPTED') ...[
+                        ElevatedButton(
+                          onPressed: () => _updateStatus(order, 'PREPARING'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(vertical: 16.h),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12.r),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            _statusUpdating == order['_id'] ? '...' : 'COOKING',
+                            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w),
+                          ),
+                        ),
+                      ] else if (!isFoodTruck && status == 'PREPARING') ...[
+                        ElevatedButton(
+                          onPressed: () => _updateStatus(order, 'READY'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0F172A),
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(vertical: 16.h),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12.r),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            _statusUpdating == order['_id'] ? '...' : 'READY',
+                            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w),
+                          ),
+                        ),
+                      ] else ...[
+                        Text(
+                          'COLLECT PAYMENT',
+                          style: TextStyle(
+                            fontSize: 9.sp,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.orange.shade600,
+                            letterSpacing: 2.w,
+                          ),
+                        ),
+                        SizedBox(height: 12.h),
+                        Row(
+                          children: [
+                            _buildPaymentButton(
+                              icon: Icons.payments_outlined,
+                              label: 'CASH',
+                              onPressed: () => isRestaurant
+                                  ? _handleCollectAndServe(order, 'CASH')
+                                  : _handleCollectEarly(order, 'CASH'),
+                              isLoading: _paymentUpdating == '${order['_id']}-CASH',
+                            ),
+                            SizedBox(width: 8.w),
+                            _buildPaymentButton(
+                              icon: Icons.qr_code_scanner,
+                              label: 'UPI',
+                              onPressed: () => isRestaurant
+                                  ? _handleCollectAndServe(order, 'UPI')
+                                  : _handleCollectEarly(order, 'UPI'),
+                              isLoading: _paymentUpdating == '${order['_id']}-UPI',
+                            ),
+                            SizedBox(width: 8.w),
+                            _buildPaymentButton(
+                              icon: Icons.credit_card,
+                              label: 'CARD',
+                              onPressed: () => isRestaurant
+                                  ? _handleCollectAndServe(order, 'CARD')
+                                  : _handleCollectEarly(order, 'CARD'),
+                              isLoading: _paymentUpdating == '${order['_id']}-CARD',
+                            ),
+                            SizedBox(width: 8.w),
+                            _buildPaymentButton(
+                              icon: Icons.content_cut,
+                              label: 'SPLIT',
+                              onPressed: () => setState(() => _splitTarget = order),
+                              isSplit: true,
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 12.h),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton(
+                            onPressed: () => _initiatePayLater(order),
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: Colors.amber.shade50.withValues(alpha: 0.2),
+                              foregroundColor: Colors.amber.shade700,
+                              side: BorderSide(color: Colors.amber.shade200, width: 1.r),
+                              padding: EdgeInsets.symmetric(vertical: 16.h),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12.r),
+                              ),
+                              elevation: 0,
+                            ),
+                            child: Text(
+                              _payLaterUpdating == order['_id'] ? '...' : 'Pay Later',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 12.sp,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
@@ -658,7 +1564,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         ? _payLaterOrders
         : _activeFilter == 'LIVE'
         ? _orders
-              .where((o) => o is Map && o['status'] != 'SERVED' && o['paymentStatus'] != 'PAY_LATER')
+              .where((o) =>
+                  o is Map &&
+                  (o['status'] != 'SERVED' ||
+                      _pendingCheckoutIds.contains(o['_id'].toString())) &&
+                  o['paymentStatus'] != 'PAY_LATER')
               .toList()
         : _orders
               .where((o) => o is Map && o['status'] == _activeFilter)
@@ -700,7 +1610,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         onOrderPlaced: (newOrder) {
           if (newOrder is Map) {
             setState(() {
-              _orders.insert(0, newOrder);
+              final orderId = newOrder['_id'];
+              final exists = _orders.any((o) => o is Map && o['_id'].toString() == orderId.toString());
+              if (!exists) {
+                _orders.insert(0, newOrder);
+              }
             });
           }
         },
@@ -972,7 +1886,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                         (o) =>
                                             o is Map &&
                                             o['status'] != 'CANCELLED' &&
-                                            o['status'] != 'SERVED' &&
+                                            (o['status'] != 'SERVED' ||
+                                                _pendingCheckoutIds.contains(
+                                                  o['_id'].toString(),
+                                                )) &&
                                             o['paymentStatus'] != 'PAY_LATER',
                                       )
                                       .length
@@ -1210,7 +2127,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             ),
                             borderRadius: BorderRadius.circular(32.r),
                             border: Border.all(
-                              color: Colors.orange.withOpacity(0.2),
+                              color: Colors.orange.withValues(alpha: 0.2),
                             ),
                           ),
                           child: Row(
@@ -1320,756 +2237,36 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         isMobile ? 16.0.w : 24.0.w,
                         isMobile ? 16.0.h : 24.0.h,
                       ),
-                      sliver: SliverGrid(
-                        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 400.w,
-                          mainAxisSpacing: 24.h,
-                          crossAxisSpacing: 24.w,
-                          childAspectRatio: isMobile ? 0.65 : 0.70,
-                        ),
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          final order = displayList[index];
-                          if (order is! Map) return const SizedBox.shrink();
-                          final status = order['status']?.toString() ?? 'NEW';
-
-                          double total = 0;
-                          final items = order['items'] ?? [];
-                          if (items is List) {
-                            for (var i in items) {
-                              if (i is! Map) continue;
-                              final itemData = i['item'];
-                              final price =
-                                  num.tryParse(
-                                    ((itemData is Map
-                                                ? itemData['branchPrice']
-                                                : null) ??
-                                            i['basePrice'] ??
-                                            0)
-                                        .toString(),
-                                  ) ??
-                                  0;
-                              final qty =
-                                  num.tryParse(
-                                    (i['quantity'] ?? 1).toString(),
-                                  ) ??
-                                  1;
-                              total += (price * qty);
-                            }
-                          }
-                          final isPending = order['paymentStatus'] == 'PENDING';
-
-                          return Container(
-                            decoration: BoxDecoration(
-                              color: isPending
-                                  ? const Color(0xFFFEF2F2)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(40.r),
-                              border: Border.all(
-                                color: isPending
-                                    ? Colors.red.shade100
-                                    : Colors.grey.shade100,
+                      sliver: isMobile
+                          ? SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  final order = displayList[index];
+                                  if (order is! Map) return const SizedBox.shrink();
+                                  return Padding(
+                                    padding: EdgeInsets.only(bottom: 24.h),
+                                    child: _buildOrderCard(context, order, isFoodTruck, authState),
+                                  );
+                                },
+                                childCount: displayList.length,
                               ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withAlpha(5),
-                                  blurRadius: 10.r,
-                                  offset: Offset(0, 4.h),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Card Header
-                                Padding(
-                                  padding: EdgeInsets.all(24.0.r),
-                                  child: Stack(
-                                    children: [
-                                      Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.spaceBetween,
-                                            children: [
-                                              Container(
-                                                padding: EdgeInsets.symmetric(
-                                                  horizontal: 12.w,
-                                                  vertical: 4.h,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: status == 'PREPARING'
-                                                      ? Colors.purple.shade50
-                                                      : status == 'ACCEPTED'
-                                                      ? Colors.orange.shade50
-                                                      : Colors.blue.shade50,
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                        20.r,
-                                                      ),
-                                                ),
-                                                child: Text(
-                                                  status == 'PREPARING'
-                                                      ? 'COOKING'
-                                                      : status == 'PAY_LATER'
-                                                      ? 'PAY LATER'
-                                                      : status,
-                                                  style: TextStyle(
-                                                    fontSize: 10.sp,
-                                                    fontWeight: FontWeight.w900,
-                                                    color: status == 'PREPARING'
-                                                        ? Colors.purple
-                                                        : status == 'ACCEPTED'
-                                                        ? Colors.orange
-                                                        : Colors.blue,
-                                                  ),
-                                                ),
-                                              ),
-                                              Row(
-                                                children: [
-                                                  if (order['paymentStatus'] ==
-                                                      'PAY_LATER')
-                                                    Container(
-                                                      margin: EdgeInsets.only(
-                                                        right: 8.w,
-                                                      ),
-                                                      padding:
-                                                          EdgeInsets.symmetric(
-                                                            horizontal: 6.w,
-                                                            vertical: 2.h,
-                                                          ),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors
-                                                            .orange
-                                                            .shade50,
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              12.r,
-                                                            ),
-                                                        border: Border.all(
-                                                          color: Colors
-                                                              .orange
-                                                              .shade200,
-                                                        ),
-                                                      ),
-                                                      child: Text(
-                                                        'PAY LATER',
-                                                        style: TextStyle(
-                                                          fontSize: 8.sp,
-                                                          fontWeight:
-                                                              FontWeight.w900,
-                                                          color: Colors
-                                                              .orange
-                                                              .shade700,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  Padding(
-                                                    padding: EdgeInsets.only(
-                                                      right: 60.0.w,
-                                                    ),
-                                                    child: Text(
-                                                      '#${(order['_id']?.toString() ?? '....').substring((order['_id']?.toString() ?? '....').length - 4).toUpperCase()}',
-                                                      style: TextStyle(
-                                                        fontSize: 10.sp,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.grey,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                          SizedBox(height: 16.h),
-                                          Text(
-                                            isFoodTruck
-                                                ? (order['customerName']
-                                                          ?.toString() ??
-                                                      'Walk-in Guest')
-                                                : 'Table ${order['tableNumber']?.toString() ?? 'NA'}',
-                                            style: TextStyle(
-                                              fontSize: 24.sp,
-                                              fontWeight: FontWeight.w900,
-                                              color: const Color(0xFF0F172A),
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          SizedBox(height: 8.h),
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                LucideIcons.clock,
-                                                size: 12.sp,
-                                                color: Colors.grey,
-                                              ),
-                                              SizedBox(width: 6.w),
-                                              Text(
-                                                DateTime.tryParse(
-                                                          order['createdAt'] ??
-                                                              '',
-                                                        )
-                                                        ?.toLocal()
-                                                        .toString()
-                                                        .substring(11, 16) ??
-                                                    'Time',
-                                                style: TextStyle(
-                                                  fontSize: 10.sp,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.grey,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                      Positioned(
-                                        right: -10.w,
-                                        top: -10.h,
-                                        child: Row(
-                                          children: [
-                                            IconButton(
-                                              icon: Icon(
-                                                LucideIcons.user,
-                                                size: 18.sp,
-                                                color: Colors.grey,
-                                              ),
-                                              onPressed: () => setState(
-                                                () => _viewDetails = order,
-                                              ),
-                                            ),
-                                            if (!isFoodTruck &&
-                                                _activeFilter != 'SERVED') ...[
-                                              IconButton(
-                                                icon: Icon(
-                                                  LucideIcons.arrowRight,
-                                                  size: 18.sp,
-                                                  color: Colors.grey,
-                                                ),
-                                                onPressed: () => setState(() {
-                                                  _shiftingOrder = order;
-                                                  _newTableValue =
-                                                      order['tableNumber']
-                                                          ?.toString() ??
-                                                      '';
-                                                }),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-
-                                // Items List
-                                Expanded(
-                                  child: Container(
-                                    padding: EdgeInsets.symmetric(horizontal: 24.r, vertical: 12.r),
-                                    decoration: BoxDecoration(
-                                      color: isPending
-                                          ? Colors.red.withAlpha(10)
-                                          : Colors.grey.shade50,
-                                      border: Border.symmetric(
-                                        horizontal: BorderSide(
-                                          color: isPending
-                                              ? Colors.red.shade50
-                                              : Colors.grey.shade100,
-                                        ),
-                                      ),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                                      children: [
-                                        Flexible(
-                                          child: ListView.builder(
-                                            shrinkWrap: true,
-                                            itemCount: (items is List) ? items.length : 0,
-                                            itemBuilder: (ctx, iIdx) {
-                                              final item = items[iIdx];
-                                        if (item is! Map)
-                                          return const SizedBox.shrink();
-                                        final itemData = item['item'];
-                                        final itemName =
-                                            (itemData is Map
-                                                ? itemData['branchName']
-                                                : null) ??
-                                            item['name'] ??
-                                            '';
-                                        final itemPrice =
-                                            num.tryParse(
-                                              ((itemData is Map
-                                                          ? itemData['branchPrice']
-                                                          : null) ??
-                                                      item['basePrice'] ??
-                                                      0)
-                                                  .toString(),
-                                            ) ??
-                                            0;
-                                        final qty =
-                                            num.tryParse(
-                                              (item['quantity'] ?? 1)
-                                                  .toString(),
-                                            ) ??
-                                            1;
-                                        final price = itemPrice * qty;
-
-                                        return Padding(
-                                          padding: EdgeInsets.only(
-                                            bottom: 16.0.h,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Container(
-                                                padding: EdgeInsets.symmetric(
-                                                  horizontal: 8.w,
-                                                  vertical: 4.h,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.white,
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                        8.r,
-                                                      ),
-                                                  border: Border.all(
-                                                    color: Colors.grey.shade200,
-                                                  ),
-                                                ),
-                                                child: Text(
-                                                  '${qty}x',
-                                                  style: TextStyle(
-                                                    fontSize: 10.sp,
-                                                    fontWeight: FontWeight.w900,
-                                                  ),
-                                                ),
-                                              ),
-                                              SizedBox(width: 12.w),
-                                              Expanded(
-                                                child: Text(
-                                                  itemName,
-                                                  style: TextStyle(
-                                                    fontSize: 12.sp,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                              Text(
-                                                '₹$price',
-                                                style: TextStyle(
-                                                  fontSize: 12.sp,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.grey,
-                                                ),
-                                              ),
-                                              if (_activeFilter != 'SERVED' &&
-                                                  status != 'READY' &&
-                                                  status != 'SERVED' &&
-                                                  (items is List &&
-                                                      items.length > 1)) ...[
-                                                SizedBox(width: 4.w),
-                                                InkWell(
-                                                  onTap: () {
-                                                    final itemId =
-                                                        item['_id'] ??
-                                                        item['item']?['_id'];
-                                                    if (itemId != null) {
-                                                      _removeItemFromOrder(
-                                                        order['_id'],
-                                                        itemId,
-                                                      );
-                                                    }
-                                                  },
-                                                  child: Container(
-                                                    padding: EdgeInsets.all(
-                                                      4.r,
-                                                    ),
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.red.shade50,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            4.r,
-                                                          ),
-                                                    ),
-                                                    child: Icon(
-                                                      Icons.close,
-                                                      size: 14.sp,
-                                                      color: Colors.red,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                  Builder(
-                                    builder: (context) {
-                                      bool isServed = order['status'] == 'SERVED' && order['paymentStatus'] != 'PAY_LATER';
-                                      if (!isServed && order['paymentStatus'] != 'PAY_LATER' && _activeFilter != 'SERVED') {
-                                        return Padding(
-                                          padding: EdgeInsets.only(top: 8.h),
-                                          child: OutlinedButton.icon(
-                                            onPressed: () {
-                                              setState(() {
-                                                _appendTarget = {
-                                                  'currentOrderId': order['_id'],
-                                                  'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}'
-                                                };
-                                              });
-                                              _scaffoldKey.currentState?.openEndDrawer();
-                                            },
-                                            icon: Icon(LucideIcons.plus, size: 10.sp),
-                                            label: Text(
-                                              'ADD ITEMS',
-                                              style: TextStyle(
-                                                fontSize: 8.sp,
-                                                fontWeight: FontWeight.w900,
-                                                color: Colors.grey.shade400,
-                                                letterSpacing: 1.w,
-                                              ),
-                                            ),
-                                            style: OutlinedButton.styleFrom(
-                                              padding: EdgeInsets.symmetric(vertical: 8.h),
-                                              side: BorderSide(color: Colors.grey.shade200, width: 1.r),
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius: BorderRadius.circular(12.r),
-                                              ),
-                                              foregroundColor: Colors.grey.shade400,
-                                            ),
-                                          ),
-                                        );
-                                      }
-                                      return const SizedBox.shrink();
-                                    },
-                                  ),
-                                ],
+                            )
+                          : SliverGrid(
+                              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 400.w,
+                                mainAxisSpacing: 24.h,
+                                crossAxisSpacing: 24.w,
+                                childAspectRatio: 0.70,
+                              ),
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  final order = displayList[index];
+                                  if (order is! Map) return const SizedBox.shrink();
+                                  return _buildOrderCard(context, order, isFoodTruck, authState);
+                                },
+                                childCount: displayList.length,
                               ),
                             ),
-                          ),
-
-                          // Bottom Actions
-                          Builder(
-                                  builder: (context) {
-                                    bool isPaid = order['paymentMethod'] != null && order['paymentMethod'].toString().isNotEmpty;
-                                    bool isServed = order['status'] == 'SERVED' && order['paymentStatus'] != 'PAY_LATER';
-                                    
-                                    return Padding(
-                                      padding: EdgeInsets.all(24.0.r),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                                        children: [
-                                          // TOTAL BILL section
-                                          Row(
-                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                            children: [
-                                              Text(
-                                                'TOTAL',
-                                                style: TextStyle(
-                                                  fontSize: 10.sp,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: Colors.grey.shade400,
-                                                  letterSpacing: 2.w,
-                                                ),
-                                              ),
-                                              Text(
-                                                '₹$total',
-                                                style: TextStyle(
-                                                  fontSize: 24.sp,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: const Color(0xFF0F172A),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          SizedBox(height: 16.h),
-                                          
-                                          // PAY_LATER breakdown info (if applicable)
-                                          if (order['paymentStatus'] == 'PAY_LATER' && order['paidAmount'] != null && (num.tryParse(order['paidAmount'].toString()) ?? 0) > 0) ...[
-                                            Container(
-                                              padding: EdgeInsets.all(12.r),
-                                              margin: EdgeInsets.only(bottom: 16.h),
-                                              decoration: BoxDecoration(
-                                                color: Colors.orange.shade50,
-                                                borderRadius: BorderRadius.circular(16.r),
-                                              ),
-                                              child: Column(
-                                                children: [
-                                                  Row(
-                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                    children: [
-                                                      Text('PAID NOW', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.green)),
-                                                      Text('₹${order['paidAmount']}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: Colors.green)),
-                                                    ],
-                                                  ),
-                                                  Divider(height: 16.h, color: Colors.orange.shade200),
-                                                  Row(
-                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                    children: [
-                                                      Text('REMAINING', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
-                                                      Text('₹${order['remainingAmount']}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w900, color: Colors.orange.shade700)),
-                                                    ],
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-
-                                          // STATE 1: PAY_LATER tab collection
-                                          if (_activeFilter == 'PAY_LATER') ...[
-                                            Text(
-                                              'COLLECT PAYMENT',
-                                              style: TextStyle(
-                                                fontSize: 9.sp,
-                                                fontWeight: FontWeight.w900,
-                                                color: Colors.orange.shade600,
-                                                letterSpacing: 2.w,
-                                              ),
-                                            ),
-                                            SizedBox(height: 12.h),
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _clearPayLaterPayment(order, 'CASH'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.amber.shade50,
-                                                      foregroundColor: Colors.amber.shade700,
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(_paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                                                  ),
-                                                ),
-                                                SizedBox(width: 8.w),
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _clearPayLaterPayment(order, 'UPI'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.amber.shade50,
-                                                      foregroundColor: Colors.amber.shade700,
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(_paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                                                  ),
-                                                ),
-                                                SizedBox(width: 8.w),
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _clearPayLaterPayment(order, 'CARD'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.amber.shade50,
-                                                      foregroundColor: Colors.amber.shade700,
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r), side: BorderSide(color: Colors.amber.shade200)),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(_paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ]
-                                          // STATE 2: PAID STATE (Image 2)
-                                          else if (isPaid && !isServed) ...[
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  flex: 1,
-                                                  child: Container(
-                                                    padding: EdgeInsets.symmetric(vertical: 16.h),
-                                                    decoration: BoxDecoration(
-                                                      color: Colors.green.shade50,
-                                                      borderRadius: BorderRadius.horizontal(left: Radius.circular(20.r)),
-                                                    ),
-                                                    child: Center(
-                                                      child: Text(
-                                                        '✓ PAID VIA ${order['paymentMethod']}',
-                                                        style: TextStyle(
-                                                          fontSize: 10.sp,
-                                                          fontWeight: FontWeight.w900,
-                                                          color: Colors.green.shade700,
-                                                          letterSpacing: 1.w,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                                Expanded(
-                                                  flex: 1,
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _updateStatus(order, 'SERVED'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: const Color(0xFF10B981), // Emerald 500
-                                                      padding: EdgeInsets.symmetric(vertical: 16.h),
-                                                      shape: RoundedRectangleBorder(
-                                                        borderRadius: BorderRadius.horizontal(right: Radius.circular(20.r)),
-                                                      ),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(
-                                                      _statusUpdating == order['_id'] ? 'WAIT...' : 'CHECKOUT',
-                                                      style: TextStyle(
-                                                        fontSize: 10.sp,
-                                                        fontWeight: FontWeight.w900,
-                                                        color: Colors.white,
-                                                        letterSpacing: 1.w,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ]
-                                          // STATE 3: UNPAID STATE (Image 1)
-                                          else if (!isPaid && !isServed) ...[
-                                            Text(
-                                              'COLLECT PAYMENT',
-                                              style: TextStyle(
-                                                fontSize: 9.sp,
-                                                fontWeight: FontWeight.w900,
-                                                color: Colors.orange.shade600,
-                                                letterSpacing: 2.w,
-                                              ),
-                                            ),
-                                            SizedBox(height: 12.h),
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _handleCollectEarly(order, 'CASH'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.grey.shade100,
-                                                      foregroundColor: const Color(0xFF0F172A),
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(_paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                                                  ),
-                                                ),
-                                                SizedBox(width: 8.w),
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _handleCollectEarly(order, 'UPI'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.grey.shade100,
-                                                      foregroundColor: const Color(0xFF0F172A),
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(_paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                                                  ),
-                                                ),
-                                                SizedBox(width: 8.w),
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _handleCollectEarly(order, 'CARD'),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.grey.shade100,
-                                                      foregroundColor: const Color(0xFF0F172A),
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(_paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10.sp, letterSpacing: 1.w)),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            SizedBox(height: 8.h),
-                                            ElevatedButton(
-                                              onPressed: () => setState(() => _splitTarget = order),
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: Colors.purple.shade50,
-                                                foregroundColor: Colors.purple.shade600,
-                                                padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius: BorderRadius.circular(12.r),
-                                                  side: BorderSide(color: Colors.purple.shade100),
-                                                ),
-                                                elevation: 0,
-                                              ),
-                                              child: Text(
-                                                '✂ SPLIT',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w900,
-                                                  fontSize: 10.sp,
-                                                  letterSpacing: 1.w,
-                                                ),
-                                              ),
-                                            ),
-                                            SizedBox(height: 8.h),
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _initiatePayLater(order),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.amber.shade50,
-                                                      foregroundColor: Colors.amber.shade700,
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(
-                                                        borderRadius: BorderRadius.circular(12.r),
-                                                        side: BorderSide(color: Colors.amber.shade200),
-                                                      ),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(
-                                                      _payLaterUpdating == order['_id'] ? '...' : 'PAY LATER',
-                                                      style: TextStyle(
-                                                        fontWeight: FontWeight.w900,
-                                                        fontSize: 10.sp,
-                                                        letterSpacing: 1.w,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                                SizedBox(width: 8.w),
-                                                Expanded(
-                                                  child: ElevatedButton(
-                                                    onPressed: () => _cancelOrder(order['_id']),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: Colors.red.shade50,
-                                                      foregroundColor: Colors.red.shade600,
-                                                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                                                      shape: RoundedRectangleBorder(
-                                                        borderRadius: BorderRadius.circular(12.r),
-                                                        side: BorderSide(color: Colors.red.shade100),
-                                                      ),
-                                                      elevation: 0,
-                                                    ),
-                                                    child: Text(
-                                                      'CANCEL',
-                                                      style: TextStyle(
-                                                        fontWeight: FontWeight.w900,
-                                                        fontSize: 10.sp,
-                                                        letterSpacing: 1.w,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                          );
-                        }, childCount: displayList.length),
-                      ),
                     ),
             ],
           ),
@@ -2460,12 +2657,12 @@ class PayLaterModalWidget extends StatefulWidget {
   final VoidCallback onCancel;
 
   const PayLaterModalWidget({
-    Key? key,
+    super.key,
     required this.order,
     required this.defaultName,
     required this.onConfirm,
     required this.onCancel,
-  }) : super(key: key);
+  });
 
   @override
   _PayLaterModalWidgetState createState() => _PayLaterModalWidgetState();
@@ -2784,12 +2981,12 @@ class SplitPaymentModalWidget extends StatefulWidget {
   final VoidCallback onCancel;
 
   const SplitPaymentModalWidget({
-    Key? key,
+    super.key,
     required this.order,
     required this.isLoading,
     required this.onConfirm,
     required this.onCancel,
-  }) : super(key: key);
+  });
 
   @override
   _SplitPaymentModalWidgetState createState() =>
@@ -3146,4 +3343,57 @@ class _SplitPaymentModalWidgetState extends State<SplitPaymentModalWidget> {
       ),
     );
   }
+}
+
+class DashedRectPainter extends CustomPainter {
+  final Color color;
+  final double strokeWidth;
+  final double gap;
+  final double borderRadius;
+
+  DashedRectPainter({
+    this.color = Colors.grey,
+    this.strokeWidth = 1.0,
+    this.gap = 5.0,
+    this.borderRadius = 12.0,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke;
+
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Radius.circular(borderRadius),
+      ));
+
+    final dashPath = Path();
+    double distance = 0.0;
+
+    for (final pathMetric in path.computeMetrics()) {
+      while (distance < pathMetric.length) {
+        final len = gap;
+        if (distance + len > pathMetric.length) {
+          dashPath.addPath(
+            pathMetric.extractPath(distance, pathMetric.length),
+            Offset.zero,
+          );
+        } else {
+          dashPath.addPath(
+            pathMetric.extractPath(distance, distance + len),
+            Offset.zero,
+          );
+        }
+        distance += len * 2;
+      }
+    }
+    canvas.drawPath(dashPath, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

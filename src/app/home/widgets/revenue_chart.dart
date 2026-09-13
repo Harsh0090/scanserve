@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 class RevenueChart extends StatelessWidget {
   final List<dynamic> graphData;
@@ -158,8 +158,9 @@ class RevenueChart extends StatelessWidget {
               interval: 1,
               getTitlesWidget: (v, _) {
                 final i = v.toInt();
-                if (i < 0 || i >= graphData.length)
+                if (i < 0 || i >= graphData.length) {
                   return const SizedBox.shrink();
+                }
                 final d = '${graphData[i]['date'] ?? ''}';
                 final short = d.length > 5 ? d.substring(5) : d;
                 return Padding(
@@ -211,7 +212,7 @@ class RevenueChart extends StatelessWidget {
     color: color,
     barWidth: 3,
     dotData: const FlDotData(show: false),
-    belowBarData: BarAreaData(show: true, color: color.withOpacity(0.08)),
+    belowBarData: BarAreaData(show: true, color: color.withValues(alpha: 0.08)),
   );
 
   String _fmtK(double v) {

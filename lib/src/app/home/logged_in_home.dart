@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../utils/apiClient.dart';
 import '../context/AuthContext.dart';
 import 'widgets/stat_card.dart';
@@ -154,7 +154,7 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
 
   Widget _buildTopBar(BuildContext context, Map<String, dynamic>? user) {
     return Container(
-      color: Colors.white.withOpacity(0.9),
+      color: Colors.white.withValues(alpha: 0.9),
       padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 8, left: 12, right: 12, bottom: 8),
       child: Column(children: [
         Row(children: [
@@ -249,7 +249,7 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
         decoration: BoxDecoration(
           color: active ? Colors.white : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: active ? [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)] : null,
+          boxShadow: active ? [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8)] : null,
         ),
         child: Text(label.toUpperCase(), style: TextStyle(
           fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 1.5,
@@ -372,3 +372,4 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
   String _fmtNum(double v) => v.toStringAsFixed(0).replaceAllMapped(
       RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
 }
+
