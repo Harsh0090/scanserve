@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../utils/apiClient.dart';
+import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import 'package:fl_chart/fl_chart.dart';
 
@@ -71,6 +73,28 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
 
   String _fmtDate(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+  String _fmtCurrency(dynamic val) {
+    if (val == null) return '0';
+    final num n = num.tryParse(val.toString()) ?? 0;
+    final int rounded = n.round();
+    final String s = rounded.abs().toString();
+    if (s.length <= 3) {
+      return (rounded < 0 ? '-' : '') + s;
+    }
+    final String lastThree = s.substring(s.length - 3);
+    final String rest = s.substring(0, s.length - 3);
+    final StringBuffer buf = StringBuffer();
+    for (int i = 0; i < rest.length; i++) {
+      if (i > 0 && (rest.length - i) % 2 == 0) {
+        buf.write(',');
+      }
+      buf.write(rest[i]);
+    }
+    buf.write(',');
+    buf.write(lastThree);
+    return (rounded < 0 ? '-' : '') + buf.toString();
+  }
+
   Future<void> _fetchAllData() async {
     final user = ref.read(authProvider).user;
     if (user == null || _selectedBranch.isEmpty) return;
@@ -97,7 +121,14 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
         : '/api/expenses/profit?from=${_fmtDate(_startDate)}&to=${_fmtDate(_endDate)}&branchId=$_selectedBranch';
     try {
       final res = await apiFetch(url);
-      if (mounted) setState(() => _data = {'totalSales': res['totalSales'] ?? 0, 'totalExpenses': res['totalExpenses'] ?? 0, 'netProfit': res['profit'] ?? 0});
+      if (mounted) {
+        setState(() => _data = {
+          'totalSales': res['totalSales'] ?? 0,
+          'totalExpenses': res['totalExpenses'] ?? 0,
+          'netProfit': res['profit'] ?? 0,
+          'totalDiscountGiven': res['totalDiscountGiven'] ?? 0,
+        });
+      }
     } catch (e) {
       debugPrint("Profit err $e");
     }
@@ -130,7 +161,23 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
       _showBranchSelectionPopup();
       return;
     }
-    if (_formAmountController.text.isEmpty) return;
+    if (_formAmountController.text.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter amount'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+
+    if (_formCategory == 'OTHER' && _formTitleController.text.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enter a title for Other expense'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
 
     setState(() => _isLoading = true);
     try {
@@ -142,13 +189,13 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
         'restaurant': _selectedBranch
       });
       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Expense added')));
+         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Expense added'), backgroundColor: Colors.green));
          _formTitleController.clear();
          _formAmountController.clear();
       }
       _fetchAllData();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -187,10 +234,279 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
          _isGstEnabled = res['gstEnabled'] == true;
          _selectedGstRate = res['gstRate'] ?? 5;
       });
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('GST enabled at $rate%')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('GST enabled at $rate%'), backgroundColor: Colors.green));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to enable GST: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to enable GST: $e'), backgroundColor: Colors.red));
     }
+  }
+
+  Future<void> _downloadGST(String from, String to, String format) async {
+    if (from.isEmpty || to.isEmpty) return;
+    final baseUrl = '${ApiConfig.baseUrl}/api/analytics/gst';
+    final urlStr = format == 'pdf'
+        ? '$baseUrl/download-pdf?from=$from&to=$to&restaurantId=ALL'
+        : '$baseUrl/download?from=$from&to=$to&restaurantId=ALL';
+
+    final uri = Uri.tryParse(urlStr);
+    if (uri != null) {
+      try {
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Could not open download URL'), backgroundColor: Colors.red),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    }
+  }
+
+  void _showGstDownloadModal() {
+    DateTime fromDate = _startDate;
+    DateTime toDate = _endDate;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28.r)),
+              child: Container(
+                constraints: BoxConstraints(maxWidth: 420.w),
+                padding: EdgeInsets.all(28.r),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(14.r),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFECFDF5),
+                        borderRadius: BorderRadius.circular(20.r),
+                      ),
+                      child: Icon(LucideIcons.download, color: const Color(0xFF059669), size: 28.sp),
+                    ),
+                    SizedBox(height: 16.h),
+                    Text(
+                      'Export GST Data',
+                      style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A)),
+                    ),
+                    SizedBox(height: 4.h),
+                    Text(
+                      'Select your preferred date range',
+                      style: TextStyle(fontSize: 12.sp, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w500),
+                    ),
+                    SizedBox(height: 24.h),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('FROM', style: TextStyle(fontSize: 9.sp, fontWeight: FontWeight.w900, color: const Color(0xFF94A3B8), letterSpacing: 1.w)),
+                              SizedBox(height: 6.h),
+                              InkWell(
+                                onTap: () async {
+                                  final d = await showDatePicker(context: context, initialDate: fromDate, firstDate: DateTime(2020), lastDate: DateTime.now());
+                                  if (d != null) {
+                                    setModalState(() => fromDate = d);
+                                  }
+                                },
+                                borderRadius: BorderRadius.circular(14.r),
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF8FAFC),
+                                    borderRadius: BorderRadius.circular(14.r),
+                                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(LucideIcons.calendar, size: 14.sp, color: const Color(0xFF94A3B8)),
+                                      SizedBox(width: 6.w),
+                                      Text(_fmtDate(fromDate), style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold, color: const Color(0xFF0F172A))),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(width: 12.w),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('TO', style: TextStyle(fontSize: 9.sp, fontWeight: FontWeight.w900, color: const Color(0xFF94A3B8), letterSpacing: 1.w)),
+                              SizedBox(height: 6.h),
+                              InkWell(
+                                onTap: () async {
+                                  final d = await showDatePicker(context: context, initialDate: toDate, firstDate: DateTime(2020), lastDate: DateTime.now());
+                                  if (d != null) {
+                                    setModalState(() => toDate = d);
+                                  }
+                                },
+                                borderRadius: BorderRadius.circular(14.r),
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF8FAFC),
+                                    borderRadius: BorderRadius.circular(14.r),
+                                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(LucideIcons.calendar, size: 14.sp, color: const Color(0xFF94A3B8)),
+                                      SizedBox(width: 6.w),
+                                      Text(_fmtDate(toDate), style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold, color: const Color(0xFF0F172A))),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 24.h),
+                    Text('CHOOSE FORMAT', style: TextStyle(fontSize: 9.sp, fontWeight: FontWeight.w900, color: const Color(0xFF94A3B8), letterSpacing: 1.w)),
+                    SizedBox(height: 10.h),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              _downloadGST(_fmtDate(fromDate), _fmtDate(toDate), 'csv');
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF2563EB),
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(vertical: 14.h),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                              elevation: 0,
+                            ),
+                            child: Text('CSV', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12.sp, letterSpacing: 1.w)),
+                          ),
+                        ),
+                        SizedBox(width: 10.w),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              _downloadGST(_fmtDate(fromDate), _fmtDate(toDate), 'pdf');
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF059669),
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(vertical: 14.h),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                              elevation: 0,
+                            ),
+                            child: Text('PDF', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12.sp, letterSpacing: 1.w)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 12.h),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text('Cancel & Close', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w900, color: const Color(0xFF94A3B8))),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showGstRateSelectionPopup() {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28.r)),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: 380.w),
+            padding: EdgeInsets.all(28.r),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: EdgeInsets.all(12.r),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    borderRadius: BorderRadius.circular(16.r),
+                  ),
+                  child: Icon(LucideIcons.receiptText, color: const Color(0xFFEA580C), size: 28.sp),
+                ),
+                SizedBox(height: 16.h),
+                Text('ENABLE GST', style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A))),
+                SizedBox(height: 4.h),
+                Text('Please select the applicable GST rate for your business analytics.', style: TextStyle(fontSize: 11.sp, color: const Color(0xFF64748B), fontWeight: FontWeight.w500)),
+                SizedBox(height: 24.h),
+                Row(
+                  children: [5, 18].map((rate) {
+                    final isSelected = _isGstEnabled && _selectedGstRate == rate;
+                    return Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4.w),
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _enableGST(rate);
+                          },
+                          borderRadius: BorderRadius.circular(20.r),
+                          child: Container(
+                            padding: EdgeInsets.symmetric(vertical: 20.h),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFFFFF7ED) : const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(20.r),
+                              border: Border.all(
+                                color: isSelected ? const Color(0xFFEA580C) : const Color(0xFFE2E8F0),
+                                width: 2.r,
+                              ),
+                            ),
+                            child: Text(
+                              '$rate%',
+                              style: TextStyle(
+                                fontSize: 18.sp,
+                                fontWeight: FontWeight.w900,
+                                color: isSelected ? const Color(0xFFEA580C) : const Color(0xFF64748B),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                SizedBox(height: 16.h),
+                Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text('Cancel and stay disabled', style: TextStyle(fontSize: 10.5.sp, fontWeight: FontWeight.w900, color: const Color(0xFF94A3B8))),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -330,16 +646,52 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                                 // KPI Cards
                                 LayoutBuilder(
                                   builder: (ctx, constraints) {
-                                    final cardWidth = constraints.maxWidth < 600 ? constraints.maxWidth : (constraints.maxWidth - 32.w) / 3;
+                                    final isMobile = constraints.maxWidth < 600;
+                                    final cardWidth = isMobile
+                                        ? (constraints.maxWidth - 12.w) / 2
+                                        : (constraints.maxWidth - 36.w) / 4;
                                     return Wrap(
-                                      spacing: 16.w, runSpacing: 16.h,
+                                      spacing: 12.w,
+                                      runSpacing: 12.h,
                                       children: [
-                                        SizedBox(width: cardWidth, child: _buildKpiCard('Gross Sales', '₹${_data!['totalSales']}', const Color(0xFF0F172A), LucideIcons.indianRupee)),
-                                        SizedBox(width: cardWidth, child: _buildKpiCard('Expenses', '₹${_data!['totalExpenses']}', Colors.red, null)),
-                                        SizedBox(width: cardWidth, child: _buildKpiCard('Net Profit', '₹${_data!['netProfit']}', _data!['netProfit'] >= 0 ? Colors.green : Colors.red, null)),
+                                        SizedBox(
+                                          width: cardWidth,
+                                          child: _buildKpiCard(
+                                            'Gross Sales',
+                                            '₹${_fmtCurrency(_data!['totalSales'])}',
+                                            const Color(0xFF0F172A),
+                                            icon: LucideIcons.indianRupee,
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: cardWidth,
+                                          child: _buildKpiCard(
+                                            'Expenses',
+                                            '₹${_fmtCurrency(_data!['totalExpenses'])}',
+                                            const Color(0xFFEF4444),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: cardWidth,
+                                          child: _buildKpiCard(
+                                            'Net Profit',
+                                            '₹${_fmtCurrency(_data!['netProfit'])}',
+                                            (num.tryParse(_data!['netProfit']?.toString() ?? '0') ?? 0) >= 0
+                                                ? const Color(0xFF059669)
+                                                : const Color(0xFFDC2626),
+                                          ),
+                                        ),
+                                        SizedBox(
+                                          width: cardWidth,
+                                          child: _buildKpiCard(
+                                            'Discount',
+                                            '₹${_fmtCurrency(_data!['totalDiscountGiven'] ?? 0)}',
+                                            const Color(0xFFF97316),
+                                          ),
+                                        ),
                                       ],
                                     );
-                                  }
+                                  },
                                 ),
                                 SizedBox(height: 24.h),
 
@@ -359,12 +711,34 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                                             Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                Container(padding: EdgeInsets.all(8.r), decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8.r)), child: Icon(LucideIcons.receipt, color: Colors.green, size: 20.sp)),
+                                                Container(
+                                                  padding: EdgeInsets.all(8.r),
+                                                  decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(8.r)),
+                                                  child: Icon(LucideIcons.receiptText, color: const Color(0xFF059669), size: 20.sp),
+                                                ),
                                                 SizedBox(width: 12.w),
-                                                Text('GST BREAKDOWN ($_selectedGstRate%)', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A))),
+                                                Text('GST BREAKDOWN ($_selectedGstRate%)', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: 0.5)),
                                               ],
                                             ),
-                                            Container(padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 4.h), decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(16.r)), child: Text('TAX COMPLIANT', style: TextStyle(color: Colors.white, fontSize: 9.sp, fontWeight: FontWeight.w900))),
+                                            InkWell(
+                                              onTap: _showGstDownloadModal,
+                                              borderRadius: BorderRadius.circular(12.r),
+                                              child: Container(
+                                                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFF1F5F9),
+                                                  borderRadius: BorderRadius.circular(12.r),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(LucideIcons.download, size: 14.sp, color: const Color(0xFF334155)),
+                                                    SizedBox(width: 6.w),
+                                                    Text('DOWNLOAD', style: TextStyle(color: const Color(0xFF334155), fontSize: 10.sp, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
                                           ],
                                         ),
                                         SizedBox(height: 24.h),
@@ -375,10 +749,10 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                                             return Wrap(
                                               spacing: 16.w, runSpacing: 16.h,
                                               children: [
-                                                SizedBox(width: itemWidth, child: _buildGstItem('Taxable', '₹${num.parse(_gstData!['totalSales']?.toString() ?? '0').toStringAsFixed(0)}', Colors.grey.shade50, Colors.black)),
-                                                SizedBox(width: itemWidth, child: _buildGstItem('CGST', '₹${(num.parse(_gstData!['totalGST']?.toString() ?? '0') / 2).toStringAsFixed(2)}', Colors.grey.shade50, Colors.green)),
-                                                SizedBox(width: itemWidth, child: _buildGstItem('SGST', '₹${(num.parse(_gstData!['totalGST']?.toString() ?? '0') / 2).toStringAsFixed(2)}', Colors.grey.shade50, Colors.green)),
-                                                SizedBox(width: itemWidth, child: _buildGstItem('Total GST', '₹${num.parse(_gstData!['totalGST']?.toString() ?? '0').toStringAsFixed(0)}', Colors.orange, Colors.white, titleColor: Colors.orange.shade100)),
+                                                SizedBox(width: itemWidth, child: _buildGstItem('Taxable', '₹${_fmtCurrency(_gstData!['totalSales'])}', Colors.grey.shade50, const Color(0xFF0F172A))),
+                                                SizedBox(width: itemWidth, child: _buildGstItem('CGST (${(_selectedGstRate / 2).toStringAsFixed(1)}%)', '₹${((num.tryParse(_gstData!['totalGST']?.toString() ?? '0') ?? 0) / 2).toStringAsFixed(2)}', Colors.grey.shade50, const Color(0xFF059669))),
+                                                SizedBox(width: itemWidth, child: _buildGstItem('SGST (${(_selectedGstRate / 2).toStringAsFixed(1)}%)', '₹${((num.tryParse(_gstData!['totalGST']?.toString() ?? '0') ?? 0) / 2).toStringAsFixed(2)}', Colors.grey.shade50, const Color(0xFF059669))),
+                                                SizedBox(width: itemWidth, child: _buildGstItem('Total GST', '₹${(num.tryParse(_gstData!['totalGST']?.toString() ?? '0') ?? 0).toStringAsFixed(2)}', const Color(0xFFEA580C), Colors.white, titleColor: const Color(0xFFFFEDD5))),
                                               ],
                                             );
                                           }
@@ -498,40 +872,94 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (isDesktop) ...[
-                                if (!_isGstEnabled)
-                                  Container(
-                                    padding: EdgeInsets.all(24.r),
-                                    decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(32.r)),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Icon(LucideIcons.shieldCheck, color: Colors.orange, size: 16.sp),
-                                                SizedBox(width: 8.w),
-                                                Text('GST STATUS', style: TextStyle(color: Colors.orange, fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1.w)),
-                                              ],
-                                            ),
-                                            Icon(LucideIcons.toggleLeft, color: Colors.grey, size: 24.sp),
-                                          ],
-                                        ),
-                                        SizedBox(height: 16.h),
-                                        Text('GST tracking is disabled. Tap below to enable.', style: TextStyle(color: Colors.grey, fontSize: 10.sp, fontWeight: FontWeight.bold)),
-                                        SizedBox(height: 16.h),
-                                        Row(
-                                          children: [
-                                            Expanded(child: ElevatedButton(onPressed: () => _enableGST(5), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange), child: Text('Enable 5%', style: TextStyle(color: Colors.white, fontSize: 12.sp)))),
-                                            SizedBox(width: 8.w),
-                                            Expanded(child: ElevatedButton(onPressed: () => _enableGST(18), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange), child: Text('Enable 18%', style: TextStyle(color: Colors.white, fontSize: 12.sp)))),
-                                          ],
-                                        )
-                                      ],
-                                    ),
+                              if (!isLimited && !_isGstEnabled) ...[
+                                Container(
+                                  padding: EdgeInsets.all(24.r),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0F172A),
+                                    borderRadius: BorderRadius.circular(32.r),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.08),
+                                        blurRadius: 16.r,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
                                   ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(LucideIcons.shieldCheck, color: const Color(0xFFF97316), size: 16.sp),
+                                              SizedBox(width: 8.w),
+                                              Text('GST STATUS', style: TextStyle(color: const Color(0xFFF97316), fontSize: 11.sp, fontWeight: FontWeight.w900, letterSpacing: 1.w)),
+                                            ],
+                                          ),
+                                          GestureDetector(
+                                            onTap: _showGstRateSelectionPopup,
+                                            child: Container(
+                                              width: 44.w,
+                                              height: 24.h,
+                                              padding: EdgeInsets.all(2.r),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF334155),
+                                                borderRadius: BorderRadius.circular(12.r),
+                                              ),
+                                              alignment: Alignment.centerLeft,
+                                              child: Container(
+                                                width: 20.h,
+                                                height: 20.h,
+                                                decoration: const BoxDecoration(
+                                                  color: Colors.white,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      SizedBox(height: 12.h),
+                                      Text(
+                                        'Toggle switch to activate GST reporting for your analytics.',
+                                        style: TextStyle(color: const Color(0xFF94A3B8), fontSize: 10.sp, fontWeight: FontWeight.bold, height: 1.4),
+                                      ),
+                                      SizedBox(height: 16.h),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: ElevatedButton(
+                                              onPressed: () => _enableGST(5),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFFEA580C),
+                                                foregroundColor: Colors.white,
+                                                padding: EdgeInsets.symmetric(vertical: 12.h),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                              ),
+                                              child: Text('Enable 5%', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w900)),
+                                            ),
+                                          ),
+                                          SizedBox(width: 8.w),
+                                          Expanded(
+                                            child: ElevatedButton(
+                                              onPressed: () => _enableGST(18),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFFEA580C),
+                                                foregroundColor: Colors.white,
+                                                padding: EdgeInsets.symmetric(vertical: 12.h),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                              ),
+                                              child: Text('Enable 18%', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w900)),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    ],
+                                  ),
+                                ),
                                 SizedBox(height: 24.h),
                               ],
 
@@ -625,23 +1053,65 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
     );
   }
 
-  Widget _buildKpiCard(String title, String value, Color valueColor, IconData? icon) {
+  Widget _buildKpiCard(String title, String value, Color valueColor, {IconData? icon}) {
     return Container(
-      padding: EdgeInsets.all(32.r),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(40.r), border: Border.all(color: Colors.grey.shade100)),
-      child: Column(
+      padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 16.h),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28.r),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 12.r,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title.toUpperCase(), style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.grey, letterSpacing: 2.w)),
-          SizedBox(height: 8.h),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(value, style: TextStyle(fontSize: 32.sp, fontWeight: FontWeight.w900, color: valueColor, letterSpacing: -1.w)),
-              if (icon != null)
-                Container(padding: EdgeInsets.all(8.r), decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8.r)), child: Icon(icon, color: Colors.grey.shade300, size: 20.sp))
-            ],
-          )
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 8.5.sp,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF94A3B8),
+                    letterSpacing: 1.2,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: 6.h),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 20.sp,
+                    fontWeight: FontWeight.w900,
+                    color: valueColor,
+                    letterSpacing: -0.5,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          if (icon != null)
+            Container(
+              margin: EdgeInsets.only(left: 6.w),
+              padding: EdgeInsets.all(6.r),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(10.r),
+              ),
+              child: Icon(icon, color: const Color(0xFFCBD5E1), size: 14.sp),
+            ),
         ],
       ),
     );
@@ -649,14 +1119,14 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
 
   Widget _buildGstItem(String title, String amount, Color bgColor, Color textColor, {Color? titleColor}) {
     return Container(
-      padding: EdgeInsets.all(20.r),
+      padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
       decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(24.r)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title.toUpperCase(), style: TextStyle(fontSize: 9.sp, fontWeight: FontWeight.w900, color: titleColor ?? Colors.grey)),
-          SizedBox(height: 4.h),
-          Text(amount, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w900, color: textColor)),
+          Text(title.toUpperCase(), style: TextStyle(fontSize: 9.sp, fontWeight: FontWeight.w900, color: titleColor ?? const Color(0xFF94A3B8))),
+          SizedBox(height: 6.h),
+          Text(amount, style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900, color: textColor)),
         ],
       ),
     );
@@ -703,7 +1173,7 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
           ),
         ]
       ),
-      swapAnimationDuration: const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 150),
     );
   }
 
@@ -775,3 +1245,4 @@ class _ProfitDashboardPageState extends ConsumerState<ProfitDashboardPage> {
     );
   }
 }
+
