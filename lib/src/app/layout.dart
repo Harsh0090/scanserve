@@ -13,6 +13,7 @@ import 'dashboard/layout.dart';
 import 'dashboard/orders/page.dart';
 import 'dashboard/OwnerSetup/page.dart';
 import 'dashboard/analytics/page.dart';
+import 'dashboard/item-sales/page.dart';
 import 'dashboard/profit/page.dart';
 import 'dashboard/upsell/page.dart';
 import 'dashboard/menu/page.dart';
@@ -97,6 +98,10 @@ final GoRouter _router = GoRouter(
         GoRoute(
           path: '/dashboard/analytics',
           builder: (context, state) => const AnalyticsPage(),
+        ),
+        GoRoute(
+          path: '/dashboard/item-sales',
+          builder: (context, state) => const ItemSalesPage(),
         ),
         GoRoute(
           path: '/dashboard/profit',

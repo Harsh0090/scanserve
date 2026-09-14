@@ -32,6 +32,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
       "icon": LucideIcons.barChart3,
     },
     {
+      "name": "Item Sales",
+      "href": "/dashboard/item-sales",
+      "icon": LucideIcons.package,
+    },
+    {
       "name": "Expense Tracker",
       "href": "/dashboard/profit",
       "icon": LucideIcons.receipt,
@@ -124,6 +129,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 "Live Orders",
                 "Table Management",
                 "Analytics",
+                "Item Sales",
                 "Expense Tracker",
                 "Menu Manager",
                 "Inventory",
