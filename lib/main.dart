@@ -5,8 +5,10 @@
 import 'dart:developer';
 import 'package:ScanServe/src/app/layout.dart';
 import 'package:ScanServe/src/services/firebase_messaging_service.dart';
+import 'package:ScanServe/src/services/order_alarm_service.dart';
 import 'package:ScanServe/src/utils/apiClient.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -20,9 +22,9 @@ void main() async {
     // Attempt default initialization first
     await Firebase.initializeApp();
     isFirebaseInitialized = true;
-    print("✅ Firebase initialized successfully (Default)");
+    log("✅ Firebase initialized successfully (Default)");
   } catch (e) {
-    print("⚠️ Default Firebase init failed, trying manual fallback: $e");
+    log("⚠️ Default Firebase init failed, trying manual fallback: $e");
     try {
       // Manual fallback for Android (using values from google-services.json)
       await Firebase.initializeApp(
@@ -35,11 +37,9 @@ void main() async {
         ),
       );
       isFirebaseInitialized = true;
-      print("✅ Firebase initialized successfully (Manual Fallback)");
+      log("✅ Firebase initialized successfully (Manual Fallback)");
     } catch (e2) {
-      print(
-        "🔥 FIREBASE CRITICAL ERROR: Both default and manual init failed: $e2",
-      );
+      log("🔥 FIREBASE CRITICAL ERROR: Both default and manual init failed: $e2");
     }
   }
 
@@ -47,12 +47,20 @@ void main() async {
     try {
       FirebaseMessagingService.setupBackgroundHandler();
     } catch (e) {
-      print("⚠️ Error setting background handler: $e");
+      log("⚠️ Error setting background handler: $e");
     }
   }
 
   // Initialize Cookies (CRITICAL for session)
   await initCookies();
+
+  // Initialize the Order Alarm foreground service options.
+  // Must be called before any startAlarm() calls.
+  OrderAlarmService.init();
+
+  // Open the communication port so the foreground-service isolate can send
+  // action events (accept/decline) back to this main isolate.
+  FlutterForegroundTask.initCommunicationPort();
 
   // Initialize Messaging Service (Async, don't block main)
   if (isFirebaseInitialized) {
@@ -62,5 +70,5 @@ void main() async {
     );
   }
 
-  runApp(const ProviderScope(child: RootLayout()));
+  runApp(const ProviderScope(child: WithForegroundTask(child: RootLayout())));
 }

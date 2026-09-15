@@ -1,8 +1,10 @@
 import 'dart:developer';
+import 'dart:typed_data';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../utils/apiClient.dart';
+import 'order_alarm_service.dart';
 
 /// Top-level background message handler.
 @pragma('vm:entry-point')
@@ -17,10 +19,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       .trim()
       .toUpperCase();
 
-  if (message.notification == null || type == 'READY') {
-    log("FCM: Forcing internal notification for type: $type");
-    await FirebaseMessagingService().showNotificationInternal(message);
-  }
+  log("FCM: Forcing internal notification for type: $type");
+  // Initialize the foreground-task service options in this background isolate.
+  OrderAlarmService.init();
+  await FirebaseMessagingService().showNotificationInternal(message);
 }
 
 class FirebaseMessagingService {
@@ -90,34 +92,41 @@ class FirebaseMessagingService {
             playSound: true,
           );
 
-      const AndroidNotificationChannel orderChannel =
+      final AndroidNotificationChannel orderChannel =
           AndroidNotificationChannel(
-            'order_ringing_channel_v7',
+            'order_ringing_channel_v8',
             'Order Notifications',
             description: 'Used for new order alerts with persistent ringing.',
             importance: Importance.max,
             playSound: true,
             sound: RawResourceAndroidNotificationSound('ringing'),
+            // Keep vibrating until dismissed
+            vibrationPattern: Int64List.fromList([0, 800, 400, 800, 400, 800]),
+            enableVibration: true,
           );
 
-      const AndroidNotificationChannel readyChannel =
+      final AndroidNotificationChannel readyChannel =
           AndroidNotificationChannel(
-            'order_ready_channel_v1',
+            'order_ready_channel_v2',
             'Order Ready',
             description: 'Used for alerts when an order is ready for pickup.',
             importance: Importance.max,
             playSound: true,
             sound: RawResourceAndroidNotificationSound('order_ready'),
+            vibrationPattern: Int64List.fromList([0, 600, 300, 600]),
+            enableVibration: true,
           );
 
-      const AndroidNotificationChannel reorderChannel =
+      final AndroidNotificationChannel reorderChannel =
           AndroidNotificationChannel(
-            'reorder_channel_v1',
+            'reorder_channel_v2',
             'Reorder Alerts',
             description: 'Used for reorder alerts.',
             importance: Importance.max,
             playSound: true,
             sound: RawResourceAndroidNotificationSound('reorder'),
+            vibrationPattern: Int64List.fromList([0, 600, 300, 600]),
+            enableVibration: true,
           );
 
       log("🚀 FCM: Creating Notification Channels...");
@@ -203,7 +212,7 @@ class FirebaseMessagingService {
     List<AndroidNotificationAction>? actions;
 
     if (isReady) {
-      channelId = 'order_ready_channel_v1';
+      channelId = 'order_ready_channel_v2';
       soundResource = 'order_ready';
       actions = [
         const AndroidNotificationAction(
@@ -214,7 +223,7 @@ class FirebaseMessagingService {
         ),
       ];
     } else if (isUpdate) {
-      channelId = 'reorder_channel_v1';
+      channelId = 'reorder_channel_v2';
       soundResource = 'reorder';
       actions = [
         const AndroidNotificationAction(
@@ -225,7 +234,7 @@ class FirebaseMessagingService {
         ),
       ];
     } else if (isOrder) {
-      channelId = 'order_ringing_channel_v7';
+      channelId = 'order_ringing_channel_v8';
       soundResource = 'ringing';
       actions = [
         const AndroidNotificationAction(
@@ -243,6 +252,10 @@ class FirebaseMessagingService {
       ];
     }
 
+    // For order/ready/update notifications: persistent (cannot be swiped away),
+    // with looping vibration, so the user MUST tap a button to dismiss.
+    final bool isActionable = isOrder || isReady || isUpdate;
+
     AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       channelId,
       isOrder
@@ -250,51 +263,74 @@ class FirebaseMessagingService {
           : (isReady
                 ? 'Order Ready'
                 : (isUpdate ? 'Order Updated' : 'Default Notifications')),
-      channelDescription: (isOrder || isReady || isUpdate)
+      channelDescription: isActionable
           ? 'Used for new order alerts with persistent ringing.'
           : 'General alerts.',
       icon: '@mipmap/ic_launcher',
       importance: Importance.max,
       priority: Priority.high,
       ticker: 'ticker',
-      fullScreenIntent: isOrder || isReady || isUpdate,
-      category: (isOrder || isReady || isUpdate)
-          ? AndroidNotificationCategory.alarm
-          : null,
+      fullScreenIntent: isActionable,
+      category: isActionable ? AndroidNotificationCategory.alarm : null,
+      // Keep re-alerting on every update
       onlyAlertOnce: false,
       sound: soundResource.isNotEmpty
           ? RawResourceAndroidNotificationSound(soundResource)
           : null,
-      audioAttributesUsage: (isOrder || isReady || isUpdate)
+      audioAttributesUsage: isActionable
           ? AudioAttributesUsage.alarm
           : AudioAttributesUsage.notification,
       actions: actions,
+      // --- Persistent until user taps a button ---
+      // Cannot be dismissed by swiping; must interact with an action button.
+      ongoing: isActionable,
+      autoCancel: !isActionable,
+      // Looping vibration pattern: [delay, vibrate, pause, vibrate, ...] ms
+      vibrationPattern: isActionable
+          ? Int64List.fromList([0, 800, 500, 800, 500, 800, 500, 800])
+          : null,
+      enableVibration: isActionable,
     );
 
     NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
     );
 
-    log("🔔 FCM: Showing Notification | Channel: $channelId | Type: $type");
-    log("🔔 FCM: Payload orderId: ${data['orderId']}");
+    // For actionable notifications (new order, ready, update) — start the
+    // foreground alarm service which loops audio until the owner responds.
+    // For non-actionable notifications — use the standard local notification.
+    if (isActionable) {
+      final String resolvedType = isOrder
+          ? type.isEmpty ? 'NEW' : type
+          : isReady ? 'READY' : 'UPDATE';
 
-    // Ensure the notification ID fits within a 32-bit signed integer (Sint31/32)
-    int notificationId =
-        (DateTime.now().millisecondsSinceEpoch % 100000) +
-        (data['orderId'].hashCode.abs() % 100000);
+      await OrderAlarmService.startAlarm(
+        orderId: data['orderId'] ?? '',
+        title: notification?.title ??
+            (isOrder ? 'New Order Received!' : 'Order Update'),
+        body: notification?.body ??
+            (isOrder ? 'Tap Accept or Decline to respond.' : ''),
+        type: resolvedType,
+      );
 
-    await _localNotifications.show(
-      id: notificationId,
-      title:
-          notification?.title ??
-          (isOrder ? "New Order Received!" : "Notification"),
-      body:
-          notification?.body ??
-          (isOrder ? "You have a new order. Please respond." : ""),
-      notificationDetails: platformDetails,
-      payload: data['orderId'] ?? '',
-    );
-    log("✅ FCM: Notification displayed with ID: $notificationId");
+      log('✅ FCM: OrderAlarmService started for type=$resolvedType, orderId=${data['orderId']}');
+    } else {
+      log('🔔 FCM: Showing local notification | Channel: $channelId | Type: $type');
+      log('🔔 FCM: Payload orderId: ${data['orderId']}');
+
+      int notificationId =
+          (DateTime.now().millisecondsSinceEpoch % 100000) +
+          ((data['orderId'] ?? '').hashCode.abs() % 100000);
+
+      await _localNotifications.show(
+        id: notificationId,
+        title: notification?.title ?? 'Notification',
+        body: notification?.body ?? '',
+        notificationDetails: platformDetails,
+        payload: data['orderId'] ?? '',
+      );
+      log('✅ FCM: Notification displayed with ID: $notificationId');
+    }
   }
 
   /// Registers the FCM token with the backend.

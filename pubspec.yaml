@@ -55,6 +55,8 @@ dependencies:
   flutter_screenutil: ^5.9.3
   print_bluetooth_thermal: ^1.2.1
   esc_pos_utils_plus: ^2.0.4
+  flutter_foreground_task: ^9.0.1
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
@@ -74,6 +76,11 @@ dev_dependencies:
 flutter:
 
   uses-material-design: true
+
+  assets:
+    - assets/sounds/ringing.mp3
+    - assets/sounds/order_ready.mp3
+    - assets/sounds/reorder.mp3
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
