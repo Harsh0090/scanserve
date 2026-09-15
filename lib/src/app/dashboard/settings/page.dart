@@ -406,7 +406,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: SingleChildScrollView(
-        padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 32.h),
+        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 24.h),
         child: Center(
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: 800.w),
@@ -415,6 +415,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 // Header
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
                       padding: EdgeInsets.all(12.r),
@@ -429,32 +430,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                     ),
                     SizedBox(width: 16.w),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Printer & KOT Settings',
-                          style: TextStyle(
-                            fontSize: 24.sp,
-                            fontWeight: FontWeight.w900,
-                            color: const Color(0xFF0F172A),
-                            letterSpacing: -0.5,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Printer & KOT Settings',
+                            style: TextStyle(
+                              fontSize: 22.sp,
+                              fontWeight: FontWeight.w900,
+                              color: const Color(0xFF0F172A),
+                              letterSpacing: -0.5,
+                            ),
                           ),
-                        ),
-                        SizedBox(height: 4.h),
-                        Text(
-                          'Configure automatic ticket printing and connect hardware',
-                          style: TextStyle(
-                            fontSize: 13.sp,
-                            color: const Color(0xFF64748B),
-                            fontWeight: FontWeight.w500,
+                          SizedBox(height: 4.h),
+                          Text(
+                            'Configure automatic ticket printing and connect hardware',
+                            style: TextStyle(
+                              fontSize: 13.sp,
+                              color: const Color(0xFF64748B),
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ],
                 ),
-                SizedBox(height: 32.h),
+                SizedBox(height: 24.h),
 
                 // KOT TOGGLES CARD
                 Container(
@@ -518,15 +521,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ],
                   ),
                 ),
-                SizedBox(height: 36.h),
+                SizedBox(height: 28.h),
 
                 // DIRECT BLUETOOTH THERMAL PRINTER CARD
                 _buildBluetoothPrinterCard(),
-                SizedBox(height: 36.h),
+                SizedBox(height: 28.h),
 
                 // PRINTER DETECTION SECTION
                 Container(
-                  padding: EdgeInsets.all(24.r),
+                  padding: EdgeInsets.all(20.r),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(24.r),
@@ -539,236 +542,266 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                     ],
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isCompact = constraints.maxWidth < 480;
+
+                      Widget printNodeHeaderInfo = Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: EdgeInsets.all(10.r),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEFF6FF),
-                                  borderRadius: BorderRadius.circular(12.r),
+                          Container(
+                            padding: EdgeInsets.all(10.r),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(12.r),
+                            ),
+                            child: Icon(
+                              LucideIcons.printerCheck,
+                              color: const Color(0xFF2563EB),
+                              size: 20.sp,
+                            ),
+                          ),
+                          SizedBox(width: 12.w),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Printer Hardware Connection',
+                                  style: TextStyle(
+                                    fontSize: 15.sp,
+                                    fontWeight: FontWeight.w800,
+                                    color: const Color(0xFF0F172A),
+                                  ),
                                 ),
-                                child: Icon(
-                                  LucideIcons.printerCheck,
-                                  color: const Color(0xFF2563EB),
-                                  size: 20.sp,
+                                SizedBox(height: 2.h),
+                                Text(
+                                  'Discover CPENSUS / PrintNode wireless & USB printers',
+                                  style: TextStyle(
+                                    fontSize: 11.sp,
+                                    color: const Color(0xFF64748B),
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+
+                      Widget detectBtn = ElevatedButton.icon(
+                        onPressed: _isDetectingPrinters ? null : _detectPrinters,
+                        icon: _isDetectingPrinters
+                            ? SizedBox(
+                                width: 14.r,
+                                height: 14.r,
+                                child: const CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Icon(LucideIcons.scan, size: 16.sp),
+                        label: Text(
+                          _isDetectingPrinters ? 'Detecting...' : 'Detect Printers',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12.sp,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0F172A),
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 16.w,
+                            vertical: 11.h,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14.r),
+                          ),
+                        ),
+                      );
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (isCompact) ...[
+                            printNodeHeaderInfo,
+                            SizedBox(height: 12.h),
+                            SizedBox(
+                              width: double.infinity,
+                              child: detectBtn,
+                            ),
+                          ] else ...[
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: printNodeHeaderInfo),
+                                SizedBox(width: 12.w),
+                                detectBtn,
+                              ],
+                            ),
+                          ],
+                          SizedBox(height: 18.h),
+
+                          if (_printerError != null)
+                            Container(
+                              padding: EdgeInsets.all(12.r),
+                              margin: EdgeInsets.only(bottom: 16.h),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade50,
+                                borderRadius: BorderRadius.circular(12.r),
+                                border: Border.all(color: Colors.amber.shade200),
                               ),
-                              SizedBox(width: 12.w),
-                              Column(
+                              child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Printer Hardware Connection',
-                                    style: TextStyle(
-                                      fontSize: 16.sp,
-                                      fontWeight: FontWeight.w800,
-                                      color: const Color(0xFF0F172A),
+                                  Icon(
+                                    LucideIcons.info,
+                                    color: Colors.amber.shade800,
+                                    size: 18.sp,
+                                  ),
+                                  SizedBox(width: 10.w),
+                                  Expanded(
+                                    child: Text(
+                                      _printerError!,
+                                      style: TextStyle(
+                                        fontSize: 12.sp,
+                                        color: Colors.amber.shade900,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
-                                  SizedBox(height: 2.h),
+                                ],
+                              ),
+                            ),
+
+                          if (_availablePrinters.isEmpty && !_isDetectingPrinters)
+                            Container(
+                              padding: EdgeInsets.symmetric(vertical: 20.h),
+                              alignment: Alignment.center,
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    LucideIcons.hardDriveDownload,
+                                    color: Colors.grey.shade400,
+                                    size: 32.sp,
+                                  ),
+                                  SizedBox(height: 8.h),
                                   Text(
-                                    'Discover CPENSUS / PrintNode wireless & USB printers',
+                                    'Tap "Detect Printers" to list active printers from backend',
+                                    textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      fontSize: 11.sp,
-                                      color: const Color(0xFF64748B),
+                                      fontSize: 12.sp,
+                                      color: Colors.grey.shade600,
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
                                 ],
                               ),
-                            ],
-                          ),
-                          ElevatedButton.icon(
-                            onPressed: _isDetectingPrinters ? null : _detectPrinters,
-                            icon: _isDetectingPrinters
-                                ? SizedBox(
-                                    width: 14.r,
-                                    height: 14.r,
-                                    child: const CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : Icon(LucideIcons.scan, size: 16.sp),
-                            label: Text(
-                              _isDetectingPrinters ? 'Detecting...' : 'Detect Printers',
+                            )
+                          else ...[
+                            Text(
+                              'SELECT TARGET PRINTER',
                               style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12.sp,
+                                fontSize: 10.sp,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1,
+                                color: Colors.grey.shade500,
                               ),
                             ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF0F172A),
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 16.w,
-                                vertical: 12.h,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14.r),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 20.h),
+                            SizedBox(height: 10.h),
+                            Wrap(
+                              spacing: 10.w,
+                              runSpacing: 10.h,
+                              children: _availablePrinters.map((p) {
+                                final pId = int.tryParse(p['id']?.toString() ?? '');
+                                final pName = p['name']?.toString() ?? 'Printer';
+                                final isSelected = pId != null && pId == _selectedPrinterId;
 
-                      if (_printerError != null)
-                        Container(
-                          padding: EdgeInsets.all(12.r),
-                          margin: EdgeInsets.only(bottom: 16.h),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.shade50,
-                            borderRadius: BorderRadius.circular(12.r),
-                            border: Border.all(color: Colors.amber.shade200),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                LucideIcons.info,
-                                color: Colors.amber.shade800,
-                                size: 18.sp,
-                              ),
-                              SizedBox(width: 10.w),
-                              Expanded(
-                                child: Text(
-                                  _printerError!,
-                                  style: TextStyle(
-                                    fontSize: 12.sp,
-                                    color: Colors.amber.shade900,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-
-                      if (_availablePrinters.isEmpty && !_isDetectingPrinters)
-                        Container(
-                          padding: EdgeInsets.symmetric(vertical: 24.h),
-                          alignment: Alignment.center,
-                          child: Column(
-                            children: [
-                              Icon(
-                                LucideIcons.hardDriveDownload,
-                                color: Colors.grey.shade400,
-                                size: 32.sp,
-                              ),
-                              SizedBox(height: 8.h),
-                              Text(
-                                'Tap "Detect Printers" to list active printers from backend',
-                                style: TextStyle(
-                                  fontSize: 13.sp,
-                                  color: Colors.grey.shade600,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      else ...[
-                        Text(
-                          'SELECT TARGET PRINTER',
-                          style: TextStyle(
-                            fontSize: 10.sp,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1,
-                            color: Colors.grey.shade500,
-                          ),
-                        ),
-                        SizedBox(height: 10.h),
-                        Wrap(
-                          spacing: 12.w,
-                          runSpacing: 12.h,
-                          children: _availablePrinters.map((p) {
-                            final pId = int.tryParse(p['id']?.toString() ?? '');
-                            final pName = p['name']?.toString() ?? 'Printer';
-                            final isSelected = pId != null && pId == _selectedPrinterId;
-
-                            return InkWell(
-                              onTap: (pId != null && !_isSavingPrinterId)
-                                  ? () => _selectPrinter(pId)
-                                  : null,
-                              borderRadius: BorderRadius.circular(16.r),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 16.w,
-                                  vertical: 14.h,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? const Color(0xFFF0FDF4)
-                                      : const Color(0xFFF8FAFC),
+                                return InkWell(
+                                  onTap: (pId != null && !_isSavingPrinterId)
+                                      ? () => _selectPrinter(pId)
+                                      : null,
                                   borderRadius: BorderRadius.circular(16.r),
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? const Color(0xFF10B981)
-                                        : Colors.grey.shade200,
-                                    width: isSelected ? 2 : 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      isSelected
-                                          ? LucideIcons.checkCircle
-                                          : LucideIcons.printer,
-                                      size: 18.sp,
-                                      color: isSelected
-                                          ? const Color(0xFF10B981)
-                                          : Colors.grey.shade600,
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 14.w,
+                                      vertical: 12.h,
                                     ),
-                                    SizedBox(width: 10.w),
-                                    Text(
-                                      pName,
-                                      style: TextStyle(
-                                        fontSize: 13.sp,
-                                        fontWeight: isSelected
-                                            ? FontWeight.w900
-                                            : FontWeight.bold,
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? const Color(0xFFF0FDF4)
+                                          : const Color(0xFFF8FAFC),
+                                      borderRadius: BorderRadius.circular(16.r),
+                                      border: Border.all(
                                         color: isSelected
-                                            ? const Color(0xFF065F46)
-                                            : const Color(0xFF1E293B),
+                                            ? const Color(0xFF10B981)
+                                            : Colors.grey.shade200,
+                                        width: isSelected ? 2 : 1,
                                       ),
                                     ),
-                                    if (isSelected) ...[
-                                      SizedBox(width: 8.w),
-                                      Container(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: 6.w,
-                                          vertical: 2.h,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          isSelected
+                                              ? LucideIcons.checkCircle
+                                              : LucideIcons.printer,
+                                          size: 18.sp,
+                                          color: isSelected
+                                              ? const Color(0xFF10B981)
+                                              : Colors.grey.shade600,
                                         ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF10B981),
-                                          borderRadius: BorderRadius.circular(6.r),
-                                        ),
-                                        child: Text(
-                                          'ACTIVE',
-                                          style: TextStyle(
-                                            fontSize: 9.sp,
-                                            fontWeight: FontWeight.w900,
-                                            color: Colors.white,
+                                        SizedBox(width: 8.w),
+                                        Flexible(
+                                          child: Text(
+                                            pName,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 13.sp,
+                                              fontWeight: isSelected
+                                                  ? FontWeight.w900
+                                                  : FontWeight.bold,
+                                              color: isSelected
+                                                  ? const Color(0xFF065F46)
+                                                  : const Color(0xFF1E293B),
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ],
-                    ],
+                                        if (isSelected) ...[
+                                          SizedBox(width: 8.w),
+                                          Container(
+                                            padding: EdgeInsets.symmetric(
+                                              horizontal: 6.w,
+                                              vertical: 2.h,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF10B981),
+                                              borderRadius: BorderRadius.circular(6.r),
+                                            ),
+                                            child: Text(
+                                              'ACTIVE',
+                                              style: TextStyle(
+                                                fontSize: 9.sp,
+                                                fontWeight: FontWeight.w900,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],
@@ -797,7 +830,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return Opacity(
       opacity: isDisabled ? 0.45 : 1.0,
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 20.h),
+        padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 16.h),
         child: Row(
           children: [
             Container(
@@ -812,7 +845,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 size: 22.sp,
               ),
             ),
-            SizedBox(width: 16.w),
+            SizedBox(width: 14.w),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -820,7 +853,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   Text(
                     title,
                     style: TextStyle(
-                      fontSize: 16.sp,
+                      fontSize: 15.sp,
                       fontWeight: FontWeight.w800,
                       color: effectiveTextColor,
                     ),
@@ -837,6 +870,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ],
               ),
             ),
+            SizedBox(width: 8.w),
             if (isLoading)
               SizedBox(
                 width: 24.r,
@@ -860,7 +894,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Widget _buildBluetoothPrinterCard() {
     return Container(
-      padding: EdgeInsets.all(24.r),
+      padding: EdgeInsets.all(20.r),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24.r),
@@ -873,350 +907,424 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header Row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(10.r),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
-                      borderRadius: BorderRadius.circular(12.r),
-                    ),
-                    child: Icon(
-                      LucideIcons.bluetooth,
-                      color: const Color(0xFF2563EB),
-                      size: 22.sp,
-                    ),
-                  ),
-                  SizedBox(width: 12.w),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'Direct Bluetooth Thermal Printer',
-                            style: TextStyle(
-                              fontSize: 16.sp,
-                              fontWeight: FontWeight.w800,
-                              color: const Color(0xFF0F172A),
-                            ),
-                          ),
-                          SizedBox(width: 8.w),
-                          Container(
-                            padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFDCFCE7),
-                              borderRadius: BorderRadius.circular(6.r),
-                            ),
-                            child: Text(
-                              'ZERO 3RD PARTY',
-                              style: TextStyle(
-                                fontSize: 9.sp,
-                                fontWeight: FontWeight.bold,
-                                color: const Color(0xFF166534),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 2.h),
-                      Text(
-                        'Direct wireless print to CPENSUS POS-58 or any ESC/POS thermal printer',
-                        style: TextStyle(
-                          fontSize: 11.sp,
-                          color: const Color(0xFF64748B),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              ElevatedButton.icon(
-                onPressed: _isBtScanning ? null : _scanBluetoothPrinters,
-                icon: _isBtScanning
-                    ? SizedBox(
-                        width: 14.r,
-                        height: 14.r,
-                        child: const CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Icon(LucideIcons.scan, size: 16.sp),
-                label: Text(
-                  _isBtScanning ? 'Scanning...' : 'Scan Bluetooth',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12.sp,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14.r),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 20.h),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isCompact = constraints.maxWidth < 480;
 
-          // Current Connection Banner
-          if (_savedBtMac.isNotEmpty)
-            Container(
-              padding: EdgeInsets.all(16.r),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0FDF4),
-                borderRadius: BorderRadius.circular(16.r),
-                border: Border.all(color: const Color(0xFFBBF7D0)),
+          Widget headerInfo = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: EdgeInsets.all(10.r),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+                child: Icon(
+                  LucideIcons.bluetooth,
+                  color: const Color(0xFF2563EB),
+                  size: 22.sp,
+                ),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(8.r),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFDCFCE7),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      LucideIcons.printer,
-                      color: const Color(0xFF16A34A),
-                      size: 20.sp,
-                    ),
-                  ),
-                  SizedBox(width: 12.w),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              SizedBox(width: 12.w),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8.w,
+                      runSpacing: 4.h,
                       children: [
-                        Row(
-                          children: [
-                            Text(
-                              _savedBtName.isNotEmpty ? _savedBtName : 'CPENSUS Thermal Printer',
-                              style: TextStyle(
-                                fontSize: 14.sp,
-                                fontWeight: FontWeight.bold,
-                                color: const Color(0xFF14532D),
-                              ),
-                            ),
-                            SizedBox(width: 8.w),
-                            Container(
-                              padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF16A34A),
-                                borderRadius: BorderRadius.circular(4.r),
-                              ),
-                              child: Text(
-                                _isBtConnected ? 'CONNECTED' : 'ACTIVE',
-                                style: const TextStyle(
-                                  fontSize: 8,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 2.h),
                         Text(
-                          'MAC: $_savedBtMac • ${_savedPaperSize}mm Roll',
+                          'Direct Bluetooth Thermal Printer',
                           style: TextStyle(
-                            fontSize: 11.sp,
-                            color: const Color(0xFF15803D),
+                            fontSize: 15.sp,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDCFCE7),
+                            borderRadius: BorderRadius.circular(6.r),
+                          ),
+                          child: Text(
+                            'ZERO 3RD PARTY',
+                            style: TextStyle(
+                              fontSize: 9.sp,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF166534),
+                            ),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _isPrintingTest ? null : _printTestTicket,
-                    icon: _isPrintingTest
-                        ? SizedBox(
-                            width: 12.r,
-                            height: 12.r,
-                            child: const CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Icon(LucideIcons.fileText, size: 14.sp),
-                    label: Text(
-                      _isPrintingTest ? 'Printing...' : 'Test Print',
-                      style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF16A34A),
-                      side: const BorderSide(color: Color(0xFF86EFAC)),
-                      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10.r),
+                    SizedBox(height: 2.h),
+                    Text(
+                      'Direct wireless print to CPENSUS POS-58 or any ESC/POS thermal printer',
+                      style: TextStyle(
+                        fontSize: 11.sp,
+                        color: const Color(0xFF64748B),
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                  ),
-                  SizedBox(width: 8.w),
-                  IconButton(
-                    tooltip: 'Disconnect Printer',
-                    icon: Icon(LucideIcons.trash2, color: Colors.red.shade400, size: 18.sp),
-                    onPressed: _disconnectBluetoothPrinter,
-                  ),
-                ],
-              ),
-            )
-          else
-            Container(
-              padding: EdgeInsets.all(16.r),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(16.r),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
-              ),
-              child: Row(
-                children: [
-                  Icon(LucideIcons.bluetoothSearching, color: const Color(0xFF94A3B8), size: 20.sp),
-                  SizedBox(width: 12.w),
-                  Expanded(
-                    child: Text(
-                      'No Bluetooth thermal printer selected. Tap "Scan Bluetooth" to discover paired printers (e.g. CPENSUS).',
-                      style: TextStyle(fontSize: 12.sp, color: const Color(0xFF64748B)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          SizedBox(height: 16.h),
-
-          // Paper Size Selector
-          Row(
-            children: [
-              Text(
-                'Paper Roll Width:',
-                style: TextStyle(
-                  fontSize: 12.sp,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF334155),
+                  ],
                 ),
               ),
-              SizedBox(width: 12.w),
-              ChoiceChip(
-                label: Text('58mm (CPENSUS)', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600)),
-                selected: _savedPaperSize == '58',
-                selectedColor: const Color(0xFFDBEAFE),
-                onSelected: (val) {
-                  if (val) _setPaperSize('58');
-                },
-              ),
-              SizedBox(width: 8.w),
-              ChoiceChip(
-                label: Text('80mm (Wide)', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600)),
-                selected: _savedPaperSize == '80',
-                selectedColor: const Color(0xFFDBEAFE),
-                onSelected: (val) {
-                  if (val) _setPaperSize('80');
-                },
-              ),
             ],
-          ),
+          );
 
-          // Paired Devices List
-          if (_pairedBtDevices.isNotEmpty) ...[
-            SizedBox(height: 20.h),
-            Divider(color: Colors.grey.shade100),
-            SizedBox(height: 8.h),
-            Text(
-              'Paired Bluetooth Devices (${_pairedBtDevices.length})',
+          Widget scanBtn = ElevatedButton.icon(
+            onPressed: _isBtScanning ? null : _scanBluetoothPrinters,
+            icon: _isBtScanning
+                ? SizedBox(
+                    width: 14.r,
+                    height: 14.r,
+                    child: const CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(LucideIcons.scan, size: 16.sp),
+            label: Text(
+              _isBtScanning ? 'Scanning...' : 'Scan Bluetooth',
               style: TextStyle(
-                fontSize: 13.sp,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xFF0F172A),
+                fontSize: 12.sp,
               ),
             ),
-            SizedBox(height: 12.h),
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _pairedBtDevices.length,
-              separatorBuilder: (context, index) => SizedBox(height: 8.h),
-              itemBuilder: (context, idx) {
-                final device = _pairedBtDevices[idx];
-                final isSelected = device.macAdress == _savedBtMac;
-                return Container(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 11.h),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14.r),
+              ),
+            ),
+          );
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              if (isCompact) ...[
+                headerInfo,
+                SizedBox(height: 12.h),
+                SizedBox(
+                  width: double.infinity,
+                  child: scanBtn,
+                ),
+              ] else ...[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: headerInfo),
+                    SizedBox(width: 12.w),
+                    scanBtn,
+                  ],
+                ),
+              ],
+              SizedBox(height: 18.h),
+
+              // Current Connection Banner
+              if (_savedBtMac.isNotEmpty)
+                Container(
+                  padding: EdgeInsets.all(14.r),
                   decoration: BoxDecoration(
-                    color: isSelected ? const Color(0xFFF0FDF4) : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(14.r),
-                    border: Border.all(
-                      color: isSelected ? const Color(0xFF86EFAC) : const Color(0xFFE2E8F0),
-                    ),
+                    color: const Color(0xFFF0FDF4),
+                    borderRadius: BorderRadius.circular(16.r),
+                    border: Border.all(color: const Color(0xFFBBF7D0)),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
+                  child: LayoutBuilder(
+                    builder: (context, bannerConstraints) {
+                      final isNarrowBanner = bannerConstraints.maxWidth < 440;
+
+                      Widget printerInfo = Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            LucideIcons.printer,
-                            size: 18.sp,
-                            color: isSelected ? const Color(0xFF16A34A) : const Color(0xFF64748B),
-                          ),
-                          SizedBox(width: 12.w),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                device.name.isNotEmpty ? device.name : 'Unknown Device',
-                                style: TextStyle(
-                                  fontSize: 13.sp,
-                                  fontWeight: FontWeight.bold,
-                                  color: const Color(0xFF0F172A),
-                                ),
-                              ),
-                              Text(
-                                device.macAdress,
-                                style: TextStyle(fontSize: 11.sp, color: const Color(0xFF94A3B8)),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      if (isSelected)
-                        Text(
-                          'Connected',
-                          style: TextStyle(
-                            fontSize: 12.sp,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF16A34A),
-                          ),
-                        )
-                      else
-                        ElevatedButton(
-                          onPressed: _isBtConnecting ? null : () => _connectBluetoothPrinter(device),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0F172A),
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10.r),
+                          Container(
+                            padding: EdgeInsets.all(8.r),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFDCFCE7),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              LucideIcons.printer,
+                              color: const Color(0xFF16A34A),
+                              size: 18.sp,
                             ),
                           ),
-                          child: Text(
-                            'Connect',
-                            style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold),
+                          SizedBox(width: 10.w),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Wrap(
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  spacing: 6.w,
+                                  runSpacing: 4.h,
+                                  children: [
+                                    Text(
+                                      _savedBtName.isNotEmpty ? _savedBtName : 'CPENSUS Thermal Printer',
+                                      style: TextStyle(
+                                        fontSize: 13.sp,
+                                        fontWeight: FontWeight.bold,
+                                        color: const Color(0xFF14532D),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF16A34A),
+                                        borderRadius: BorderRadius.circular(4.r),
+                                      ),
+                                      child: Text(
+                                        _isBtConnected ? 'CONNECTED' : 'ACTIVE',
+                                        style: const TextStyle(
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.w900,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 2.h),
+                                Text(
+                                  'MAC: $_savedBtMac • ${_savedPaperSize}mm Roll',
+                                  style: TextStyle(
+                                    fontSize: 11.sp,
+                                    color: const Color(0xFF15803D),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
                           ),
+                        ],
+                      );
+
+                      Widget actions = Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _isPrintingTest ? null : _printTestTicket,
+                            icon: _isPrintingTest
+                                ? SizedBox(
+                                    width: 12.r,
+                                    height: 12.r,
+                                    child: const CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : Icon(LucideIcons.fileText, size: 14.sp),
+                            label: Text(
+                              _isPrintingTest ? 'Printing...' : 'Test Print',
+                              style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF16A34A),
+                              side: const BorderSide(color: Color(0xFF86EFAC)),
+                              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10.r),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 8.w),
+                          IconButton(
+                            tooltip: 'Disconnect Printer',
+                            icon: Icon(LucideIcons.trash2, color: Colors.red.shade400, size: 18.sp),
+                            onPressed: _disconnectBluetoothPrinter,
+                          ),
+                        ],
+                      );
+
+                      if (isNarrowBanner) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            printerInfo,
+                            SizedBox(height: 10.h),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: actions,
+                            ),
+                          ],
+                        );
+                      } else {
+                        return Row(
+                          children: [
+                            Expanded(child: printerInfo),
+                            SizedBox(width: 8.w),
+                            actions,
+                          ],
+                        );
+                      }
+                    },
+                  ),
+                )
+              else
+                Container(
+                  padding: EdgeInsets.all(14.r),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(16.r),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(LucideIcons.bluetoothSearching, color: const Color(0xFF94A3B8), size: 20.sp),
+                      SizedBox(width: 12.w),
+                      Expanded(
+                        child: Text(
+                          'No Bluetooth thermal printer selected. Tap "Scan Bluetooth" to discover paired printers (e.g. CPENSUS).',
+                          style: TextStyle(fontSize: 12.sp, color: const Color(0xFF64748B)),
                         ),
+                      ),
                     ],
                   ),
-                );
-              },
-            ),
-          ],
-        ],
+                ),
+              SizedBox(height: 16.h),
+
+              // Paper Size Selector
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 10.w,
+                runSpacing: 8.h,
+                children: [
+                  Text(
+                    'Paper Roll Width:',
+                    style: TextStyle(
+                      fontSize: 12.sp,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF334155),
+                    ),
+                  ),
+                  ChoiceChip(
+                    label: Text('58mm (CPENSUS)', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600)),
+                    selected: _savedPaperSize == '58',
+                    selectedColor: const Color(0xFFDBEAFE),
+                    onSelected: (val) {
+                      if (val) _setPaperSize('58');
+                    },
+                  ),
+                  ChoiceChip(
+                    label: Text('80mm (Wide)', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600)),
+                    selected: _savedPaperSize == '80',
+                    selectedColor: const Color(0xFFDBEAFE),
+                    onSelected: (val) {
+                      if (val) _setPaperSize('80');
+                    },
+                  ),
+                ],
+              ),
+
+              // Paired Devices List
+              if (_pairedBtDevices.isNotEmpty) ...[
+                SizedBox(height: 20.h),
+                Divider(color: Colors.grey.shade100),
+                SizedBox(height: 8.h),
+                Text(
+                  'Paired Bluetooth Devices (${_pairedBtDevices.length})',
+                  style: TextStyle(
+                    fontSize: 13.sp,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
+                SizedBox(height: 12.h),
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _pairedBtDevices.length,
+                  separatorBuilder: (context, index) => SizedBox(height: 8.h),
+                  itemBuilder: (context, idx) {
+                    final device = _pairedBtDevices[idx];
+                    final isSelected = device.macAdress == _savedBtMac;
+                    return Container(
+                      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFFF0FDF4) : const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(14.r),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF86EFAC) : const Color(0xFFE2E8F0),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Icon(
+                                  LucideIcons.printer,
+                                  size: 18.sp,
+                                  color: isSelected ? const Color(0xFF16A34A) : const Color(0xFF64748B),
+                                ),
+                                SizedBox(width: 12.w),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        device.name.isNotEmpty ? device.name : 'Unknown Device',
+                                        style: TextStyle(
+                                          fontSize: 13.sp,
+                                          fontWeight: FontWeight.bold,
+                                          color: const Color(0xFF0F172A),
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      SizedBox(height: 2.h),
+                                      Text(
+                                        device.macAdress,
+                                        style: TextStyle(fontSize: 11.sp, color: const Color(0xFF94A3B8)),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(width: 10.w),
+                          if (isSelected)
+                            Text(
+                              'Connected',
+                              style: TextStyle(
+                                fontSize: 12.sp,
+                                fontWeight: FontWeight.bold,
+                                color: const Color(0xFF16A34A),
+                              ),
+                            )
+                          else
+                            ElevatedButton(
+                              onPressed: _isBtConnecting ? null : () => _connectBluetoothPrinter(device),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0F172A),
+                                foregroundColor: Colors.white,
+                                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10.r),
+                                ),
+                              ),
+                              child: Text(
+                                'Connect',
+                                style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
