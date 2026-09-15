@@ -13,8 +13,6 @@ class Sidebar extends ConsumerStatefulWidget {
 }
 
 class _SidebarState extends ConsumerState<Sidebar> {
-  bool _isExpanded = true;
-
   final List<Map<String, dynamic>> _allNavItems = [
     {
       "name": "Live Orders",
@@ -165,7 +163,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
     if (authState.loading2) {
       return Container(
-        width: _isExpanded ? 280.w : 96.w,
+        width: double.infinity,
         color: Colors.white,
         child: const Center(
           child: CircularProgressIndicator(color: Color(0xFFFF5C00)),
@@ -177,193 +175,162 @@ class _SidebarState extends ConsumerState<Sidebar> {
     // authState.user = res['data'] from /api/auth/me, which has role, restaurantId, etc at top level.
     final navItems = _getFilteredItems(authState.user);
     final currentPath = GoRouterState.of(context).uri.toString();
-    final isMobile = MediaQuery.of(context).size.width < 768.w;
 
     return SafeArea(
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        width: isMobile ? double.infinity : (_isExpanded ? 280.w : 96.w),
+      child: Container(
+        width: double.infinity,
         decoration: const BoxDecoration(
           color: Colors.white,
           border: Border(right: BorderSide(color: Color(0xFFEFF2F4))),
         ),
         child: Column(
           children: [
-            // LOGO SECTION
+            // LOGO & CLOSE SECTION
             Padding(
-              padding: EdgeInsets.all(24.r),
+              padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 20.h),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  if (isMobile || _isExpanded)
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => context.go('/'),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(6.r),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFF5C00),
-                                borderRadius: BorderRadius.circular(8.r),
-                              ),
-                              child: Icon(
-                                LucideIcons.qrCode,
-                                color: Colors.white,
-                                size: 20.sp,
-                              ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        context.go('/');
+                        if (Scaffold.of(context).hasDrawer) {
+                          Navigator.of(context).pop();
+                        }
+                      },
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.all(6.r),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFF5C00),
+                              borderRadius: BorderRadius.circular(8.r),
                             ),
-                            SizedBox(width: 8.w),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    'Scan Serve',
-                                    style: TextStyle(
-                                      fontSize: 18.sp,
-                                      fontWeight: FontWeight.w900,
-                                      color: const Color(0xFF0F172A),
-                                      height: 1,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Text(
-                                    'ADMIN PORTAL',
-                                    style: TextStyle(
-                                      fontSize: 9.sp,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.grey,
-                                      letterSpacing: 1,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                            child: Icon(
+                              LucideIcons.qrCode,
+                              color: Colors.white,
+                              size: 20.sp,
                             ),
-                          ],
-                        ),
-                      ),
-                    )
-                  else
-                    GestureDetector(
-                      onTap: () => context.go('/'),
-                      child: Container(
-                        padding: EdgeInsets.all(6.r),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFF5C00),
-                          borderRadius: BorderRadius.circular(8.r),
-                        ),
-                        child: Icon(
-                          LucideIcons.qrCode,
-                          color: Colors.white,
-                          size: 20.sp,
-                        ),
+                          ),
+                          SizedBox(width: 10.w),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Scan Serve',
+                                  style: TextStyle(
+                                    fontSize: 18.sp,
+                                    fontWeight: FontWeight.w900,
+                                    color: const Color(0xFF0F172A),
+                                    height: 1.1,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  'ADMIN PORTAL',
+                                  style: TextStyle(
+                                    fontSize: 9.sp,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                  ),
 
-                  // Toggle Button (Hidden on very tiny constraints but visible normally)
-                  if (!isMobile)
-                    GestureDetector(
-                      onTap: () => setState(() => _isExpanded = !_isExpanded),
-                      child: Container(
-                        padding: EdgeInsets.all(4.r),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.grey.shade200),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withAlpha(10),
-                              blurRadius: 4.r,
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          _isExpanded
-                              ? LucideIcons.chevronLeft
-                              : LucideIcons.chevronRight,
-                          size: 16.sp,
-                        ),
-                      ),
+                  // Close Drawer Button
+                  IconButton(
+                    icon: Icon(
+                      LucideIcons.x,
+                      size: 20.sp,
+                      color: const Color(0xFF64748B),
                     ),
+                    onPressed: () {
+                      if (Scaffold.of(context).hasDrawer) {
+                        Navigator.of(context).pop();
+                      }
+                    },
+                    tooltip: 'Close Menu',
+                  ),
                 ],
               ),
             ),
 
+            const Divider(height: 1, color: Color(0xFFEFF2F4)),
+
             // NAVIGATION ITEMS
             Expanded(
               child: ListView.builder(
-                padding: EdgeInsets.symmetric(horizontal: 16.w),
+                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                 itemCount: navItems.length,
                 itemBuilder: (context, index) {
                   final item = navItems[index];
                   final bool isActive = currentPath.startsWith(item['href']);
 
-                  return Tooltip(
-                    message: (isMobile || _isExpanded) ? '' : item['name'],
-                    child: InkWell(
-                      onTap: () {
-                        context.go(item['href']);
-                        if (isMobile && Scaffold.of(context).hasDrawer) {
-                          Navigator.pop(context);
-                        }
-                      },
-                      borderRadius: BorderRadius.circular(16.r),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        margin: EdgeInsets.only(bottom: 8.h),
-                        padding: EdgeInsets.symmetric(
-                          vertical: 16.h,
-                          horizontal: (isMobile || _isExpanded) ? 20.w : 0,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isActive
-                              ? const Color(0xFFFF5C00)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(16.r),
-                          boxShadow: isActive
-                              ? [
-                                  BoxShadow(
-                                    color: const Color(
-                                      0xFFFF5C00,
-                                    ).withAlpha(100),
-                                    blurRadius: 10.r,
-                                    offset: Offset(0, 4.h),
-                                  ),
-                                ]
-                              : [],
-                        ),
-                        child: Row(
-                          mainAxisAlignment: (isMobile || _isExpanded)
-                              ? MainAxisAlignment.start
-                              : MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              item['icon'],
-                              size: 22.sp,
-                              color: isActive
-                                  ? Colors.white
-                                  : const Color(0xFF475569),
-                            ),
-                            if (isMobile || _isExpanded) ...[
-                              SizedBox(width: 16.w),
-                              Expanded(
-                                child: Text(
-                                  item['name'],
-                                  style: TextStyle(
-                                    fontSize: 15.sp,
-                                    fontWeight: FontWeight.bold,
-                                    color: isActive
-                                        ? Colors.white
-                                        : const Color(0xFF475569),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
+                  return InkWell(
+                    onTap: () {
+                      context.go(item['href']);
+                      if (Scaffold.of(context).hasDrawer) {
+                        Navigator.of(context).pop();
+                      }
+                    },
+                    borderRadius: BorderRadius.circular(16.r),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: EdgeInsets.only(bottom: 8.h),
+                      padding: EdgeInsets.symmetric(
+                        vertical: 14.h,
+                        horizontal: 16.w,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? const Color(0xFFFF5C00)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16.r),
+                        boxShadow: isActive
+                            ? [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFFFF5C00,
+                                  ).withAlpha(100),
+                                  blurRadius: 10.r,
+                                  offset: Offset(0, 4.h),
                                 ),
+                              ]
+                            : [],
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            item['icon'],
+                            size: 22.sp,
+                            color: isActive
+                                ? Colors.white
+                                : const Color(0xFF475569),
+                          ),
+                          SizedBox(width: 14.w),
+                          Expanded(
+                            child: Text(
+                              item['name'],
+                              style: TextStyle(
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.bold,
+                                color: isActive
+                                    ? Colors.white
+                                    : const Color(0xFF475569),
                               ),
-                            ],
-                          ],
-                        ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   );
@@ -373,33 +340,33 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
             // FOOTER LOGOUT
             Container(
-              padding: EdgeInsets.all(24.r),
+              padding: EdgeInsets.all(20.r),
               decoration: const BoxDecoration(
                 border: Border(top: BorderSide(color: Color(0xFFEFF2F4))),
               ),
               child: InkWell(
-                onTap: _handleLogout,
+                onTap: () {
+                  if (Scaffold.of(context).hasDrawer) {
+                    Navigator.of(context).pop();
+                  }
+                  _handleLogout();
+                },
                 child: Row(
-                  mainAxisAlignment: (isMobile || _isExpanded)
-                      ? MainAxisAlignment.start
-                      : MainAxisAlignment.center,
                   children: [
                     Icon(
                       LucideIcons.logOut,
                       size: 22.sp,
                       color: Colors.grey,
                     ),
-                    if (isMobile || _isExpanded) ...[
-                      SizedBox(width: 16.w),
-                      Text(
-                        'Sign Out',
-                        style: TextStyle(
-                          fontSize: 14.sp,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.grey,
-                        ),
+                    SizedBox(width: 14.w),
+                    Text(
+                      'Sign Out',
+                      style: TextStyle(
+                        fontSize: 14.sp,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey,
                       ),
-                    ],
+                    ),
                   ],
                 ),
               ),

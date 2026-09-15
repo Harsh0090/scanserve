@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../components/Sidebar.dart';
 
 class DashboardLayout extends ConsumerStatefulWidget {
@@ -16,43 +17,64 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 768.w;
-
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF9FAFB),
-      appBar: isMobile
-          ? AppBar(
-              backgroundColor: Colors.white,
-              elevation: 0,
-              iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
-              title: Text(
-                'Dashboard',
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: EdgeInsets.all(6.r),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF5C00),
+                borderRadius: BorderRadius.circular(8.r),
+              ),
+              child: Icon(
+                LucideIcons.qrCode,
+                color: Colors.white,
+                size: 18.sp,
+              ),
+            ),
+            SizedBox(width: 8.w),
+            RichText(
+              text: TextSpan(
                 style: TextStyle(
-                  color: const Color(0xFF0F172A),
-                  fontWeight: FontWeight.w900,
                   fontSize: 18.sp,
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFF0F172A),
                 ),
+                children: const [
+                  TextSpan(text: 'Scan '),
+                  TextSpan(
+                    text: 'Serve',
+                    style: TextStyle(color: Color(0xFFFF5C00)),
+                  ),
+                ],
               ),
-              centerTitle: true,
-              leading: IconButton(
-                icon: const Icon(Icons.menu),
-                onPressed: () {
-                  _scaffoldKey.currentState?.openDrawer();
-                },
-              ),
-            )
-          : null,
-      drawer: isMobile ? const Drawer(child: Sidebar()) : null,
-      body: Row(
-        children: [
-          // Sidebar is permanently visible on Desktop sizes.
-          if (!isMobile) const Sidebar(),
-
-          // Main Content
-          Expanded(child: ClipRect(child: widget.child)),
-        ],
+            ),
+          ],
+        ),
+        centerTitle: false,
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          tooltip: 'Navigation Menu',
+          onPressed: () {
+            _scaffoldKey.currentState?.openDrawer();
+          },
+        ),
+      ),
+      drawer: const Drawer(
+        child: Sidebar(),
+      ),
+      body: SizedBox.expand(
+        child: widget.child,
       ),
     );
   }
 }
+
