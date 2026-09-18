@@ -843,21 +843,41 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   }
 
   Future<void> _printOrderBill(dynamic order) async {
+    final orderId = order['_id']?.toString();
+    if (orderId == null) return;
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Fetching bill...'),
+          duration: Duration(seconds: 1),
+          backgroundColor: Colors.blueGrey,
+        ),
+      );
+    }
+
     try {
-      final authState = ref.read(authProvider);
-      final isRestaurant = authState.user?['businessType'] == "RESTAURANT" || authState.user?['data']?['businessType'] == "RESTAURANT";
-      if (mounted && !isRestaurant) {
+      // Step 1: Fetch bill data from backend
+      final data = await apiFetch('/api/admin/orders/$orderId/bill-preview', method: 'GET');
+
+      if (data == null || data['bill'] == null) {
+        throw Exception('Invalid bill response from server');
+      }
+
+      final bill = Map<String, dynamic>.from(data['bill'] as Map);
+
+      // Step 2: Route through KotPrintService (Bluetooth → backend fallback)
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printBill(bill: bill);
+
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Sending to printer...'),
+            content: Text('✅ Bill sent to printer'),
             backgroundColor: Colors.green,
           ),
         );
       }
-      await apiFetch(
-        '/api/admin/orders/${order['_id']}/print-bill',
-        method: 'PATCH',
-      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -869,6 +889,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       }
     }
   }
+
 
   List<Map<String, dynamic>> _getGroupedPayLaterOrders() {
     final Map<String, Map<String, dynamic>> groups = {};

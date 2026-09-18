@@ -409,6 +409,57 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                           ),
                         ),
 
+                        // Missing fields checklist — only shown when form is incomplete
+                        if (!_isFormValid) ...[
+                          SizedBox(height: 12.h),
+                          Container(
+                            padding: EdgeInsets.all(12.r),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF7ED),
+                              borderRadius: BorderRadius.circular(12.r),
+                              border: Border.all(color: const Color(0xFFFF5C00).withAlpha(60)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Complete these to continue:',
+                                  style: TextStyle(
+                                    fontSize: 11.sp,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFF92400E),
+                                  ),
+                                ),
+                                SizedBox(height: 8.h),
+                                ...[
+                                  if (_form['businessType'] == '')
+                                    '• Select a Business Type',
+                                  if (_form['businessType'] != '' && _form['mode'] == '')
+                                    '• Choose how you will use the app (Orders only / Full setup)',
+                                  if (_form['organizationName'].toString().isEmpty)
+                                    '• Enter your Brand Name',
+                                  if (!_form['email'].toString().contains('@'))
+                                    '• Enter a valid Email address',
+                                  if (_form['phone'].toString().length < 10)
+                                    '• Phone number must be at least 10 digits',
+                                  if (_form['password'].toString().length < 6)
+                                    '• Password must be at least 6 characters',
+                                ].map((msg) => Padding(
+                                  padding: EdgeInsets.only(bottom: 4.h),
+                                  child: Text(
+                                    msg,
+                                    style: TextStyle(
+                                      fontSize: 11.sp,
+                                      fontWeight: FontWeight.w600,
+                                      color: const Color(0xFFB45309),
+                                    ),
+                                  ),
+                                )),
+                              ],
+                            ),
+                          ),
+                        ],
+
                         SizedBox(height: 40.h),
                         Center(
                           child: Wrap(

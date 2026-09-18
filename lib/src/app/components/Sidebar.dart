@@ -277,10 +277,13 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
                   return InkWell(
                     onTap: () {
-                      context.go(item['href']);
-                      if (Scaffold.of(context).hasDrawer) {
+                      // Close drawer BEFORE navigating — the Drawer's context is
+                      // outside the ShellRoute subtree, so we must pop it first
+                      // to avoid GoException: no routes for location.
+                      if (Scaffold.of(context).isDrawerOpen) {
                         Navigator.of(context).pop();
                       }
+                      context.go(item['href']);
                     },
                     borderRadius: BorderRadius.circular(16.r),
                     child: AnimatedContainer(

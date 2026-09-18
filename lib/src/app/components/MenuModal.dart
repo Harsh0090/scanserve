@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../context/AuthContext.dart';
 import '../../utils/apiClient.dart';
+import '../../services/kot_print_service.dart';
 
 class MenuModal extends ConsumerStatefulWidget {
   final Map<String, dynamic>? table;
@@ -55,6 +56,13 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _mobileSheetExpanded = false;
 
   bool get _isExistingOrder => widget.sendAppendOrder != null && widget.sendAppendOrder!['currentOrderId'] != null;
+
+  /// Mirrors JS: canPrintKOT = user.autoPrintKOT || user.liveOrderKOT
+  bool get _canPrintKOT {
+    final user = ref.read(authProvider).user;
+    final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+    return userData['autoPrintKOT'] == true || userData['liveOrderKOT'] == true;
+  }
 
   @override
   void initState() {
@@ -237,7 +245,10 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     return total;
   }
 
-  Future<void> _handleSendOrder() async {
+  /// Mirrors JS handleSendOrder(shouldPrintKOT).
+  /// shouldPrintKOT=true  → place/save order AND print KOT
+  /// shouldPrintKOT=false → place/save order silently (no KOT)
+  Future<void> _handleSendOrder({bool shouldPrintKOT = true}) async {
     if (_isSubmitting) return;
 
     if (widget.onCartConfirmed != null) {
@@ -252,6 +263,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     setState(() => _isSubmitting = true);
 
     try {
+      // ─── EXISTING ORDER (append / update) ───────────────────────────────
       if (_isExistingOrder) {
         if (!_hasAnyChanges()) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No changes to save")));
@@ -261,54 +273,119 @@ class _MenuModalState extends ConsumerState<MenuModal> {
 
         final orderId = widget.sendAppendOrder!['currentOrderId'] as String;
 
-        List<String> removedIds = [];
-        for (var id in _originalQuantities.keys) {
-          if (!_existingItems.containsKey(id)) removedIds.add(id);
-        }
+        // Identify removed lines
+        final removedIds = _originalQuantities.keys
+            .where((id) => !_existingItems.containsKey(id))
+            .toList();
 
-        List<Map<String, dynamic>> reducedLines = [];
-        for (var line in _existingItems.values) {
-          final id = line['_id'];
-          final orig = _originalQuantities[id];
-          if (orig != null && line['quantity'] < orig && line['quantity'] > 0) {
-            reducedLines.add(line);
-          }
-        }
+        // Lines whose quantity was REDUCED (not zeroed)
+        final reducedLines = _existingItems.values.where((line) {
+          final orig = _originalQuantities[line['_id']];
+          return orig != null && line['quantity'] < orig && line['quantity'] > 0;
+        }).toList();
 
-        List<Map<String, dynamic>> newCartItems = _cart.values.map((i) => {
+        // Lines whose quantity was INCREASED → these go on the KOT
+        final increasedLines = _existingItems.values.where((line) {
+          final orig = _originalQuantities[line['_id']];
+          return orig != null && line['quantity'] > orig;
+        }).toList();
+
+        // New cart items being appended
+        final newCartItems = _cart.values.map((i) => {
           'itemId': i['_id'],
           'quantity': i['quantity'],
           'isUpsell': false,
         }).toList();
 
-        for (var line in reducedLines) {
+        // Build KOT items: only the delta (increased units)
+        final updatedKOTItems = <Map<String, dynamic>>[];
+        for (final line in increasedLines) {
+          final originalQty = _originalQuantities[line['_id']] ?? 0;
+          final delta = (line['quantity'] as int) - originalQty;
+          if (delta > 0) {
+            updatedKOTItems.add({
+              'item': {'branchName': line['name']},
+              'quantity': delta,
+              'skipKitchen': false,
+            });
+          }
+        }
+
+        // Apply quantity reductions
+        for (final line in reducedLines) {
           await apiFetch('/api/orders/$orderId/update-item', method: 'PATCH', data: {
             'lineId': line['_id'],
             'quantity': line['quantity'],
+            'skipAutoPrint': !shouldPrintKOT,
           });
         }
 
+        // Append brand-new items from cart
+        dynamic updatedOrder;
         if (newCartItems.isNotEmpty) {
-          await apiFetch('/api/orders/append-items', method: 'PUT', data: {
+          updatedOrder = await apiFetch('/api/orders/append-items', method: 'PUT', data: {
             'orderId': orderId,
             'items': newCartItems,
+            'skipAutoPrint': !shouldPrintKOT,
           });
         }
 
-        for (var lineId in removedIds) {
+        // Remove fully-deleted lines
+        for (final lineId in removedIds) {
           await apiFetch('/api/admin/orders/$orderId/remove-item', method: 'PATCH', data: {
             'itemId': lineId,
           });
         }
 
+        // ── KOT for quantity-increased existing items ──
+        if (shouldPrintKOT && updatedKOTItems.isNotEmpty) {
+          try {
+            final kotService = ref.read(kotPrintServiceProvider);
+            await kotService.printKOT(
+              orderId: orderId,
+              items: updatedKOTItems,
+              isAddOn: true,
+              tableNumber: widget.table?['tableName']?.toString(),
+              restaurantName: ref.read(authProvider).user?['organizationName']?.toString(),
+            );
+          } catch (e) {
+            debugPrint('⚠️ KOT print error (increased items): $e');
+          }
+        }
+
+        // ── KOT for newly appended cart items ──
+        if (shouldPrintKOT && updatedOrder != null && _cart.isNotEmpty) {
+          try {
+            final newOrderItems = _cart.values.map((i) => {
+              'item': {'branchName': i['name'] ?? ''},
+              'name': i['name'] ?? '',
+              'quantity': i['quantity'],
+              'skipKitchen': false,
+            }).toList();
+            final kotService = ref.read(kotPrintServiceProvider);
+            await kotService.printKOT(
+              orderId: orderId,
+              items: newOrderItems,
+              isAddOn: true,
+              tableNumber: widget.table?['tableName']?.toString(),
+              restaurantName: ref.read(authProvider).user?['organizationName']?.toString(),
+            );
+          } catch (e) {
+            debugPrint('⚠️ KOT print error (appended items): $e');
+          }
+        }
+
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Order updated successfully!'), backgroundColor: Colors.green));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Order updated successfully!'), backgroundColor: Colors.green),
+          );
           setState(() => _cart = {});
           Future.delayed(const Duration(milliseconds: 300), widget.onClose);
         }
         return;
       }
 
+      // ─── NEW ORDER ──────────────────────────────────────────────────────
       if (_cart.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Your cart is empty")));
         setState(() => _isSubmitting = false);
@@ -322,6 +399,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           'isUpsell': false,
         }).toList(),
         'placedBy': 'STAFF',
+        'skipAutoPrint': !shouldPrintKOT,
       };
 
       if (_mode == 'quick') {
@@ -329,6 +407,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         payload['customerPhone'] = null;
       }
       if (_mode == 'restaurant') {
+        payload['tableId'] = widget.table?['_id'];
         payload['tableNumber'] = widget.table?['tableName'] ?? 'NA';
         payload['customerPhone'] = 'NA';
         payload['paymentMode'] = 'POSTPAID';
@@ -348,7 +427,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       }
 
       final res = await apiFetch('/api/orders', method: 'POST', data: payload);
-      
+
       dynamic createdOrder;
       if (res is Map) {
         createdOrder = res['data'] ?? res['order'] ?? res;
@@ -356,6 +435,25 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         createdOrder = res[0];
       } else {
         createdOrder = res;
+      }
+
+      // ── KOT for new order ──
+      if (shouldPrintKOT && createdOrder != null) {
+        try {
+          final items = (createdOrder['items'] as List<dynamic>?) ?? _cart.values.toList();
+          final kotService = ref.read(kotPrintServiceProvider);
+          await kotService.printKOT(
+            orderId: (createdOrder['_id'] ?? '').toString(),
+            items: items,
+            isAddOn: false,
+            tableNumber: widget.table?['tableName']?.toString() ??
+                createdOrder['tableNumber']?.toString(),
+            customerName: createdOrder['customerName']?.toString(),
+            restaurantName: ref.read(authProvider).user?['organizationName']?.toString(),
+          );
+        } catch (e) {
+          debugPrint('⚠️ KOT print error (new order): $e');
+        }
       }
 
       if (mounted) {
@@ -375,7 +473,9 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Order failed: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Order failed: $e'), backgroundColor: Colors.red),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -428,12 +528,14 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     }
   }
 
-  String _confirmButtonLabel() {
+  /// withPrint=true → "Place Order + KOT", withPrint=false → "Save Order" / "Place Order"
+  String _confirmButtonLabel({bool withPrint = false}) {
     if (_isSubmitting) {
       return _isExistingOrder ? "SAVING..." : "PLACING...";
     }
     if (widget.onCartConfirmed != null) return "✅ DONE — ADD TO ORDER";
-    return "PLACE ORDER";
+    if (withPrint) return _isExistingOrder ? "SAVE + PRINT KOT" : "PLACE ORDER + KOT";
+    return _isExistingOrder ? "SAVE ORDER" : "PLACE ORDER";
   }
 
   bool _isSubmitDisabled() {
@@ -778,14 +880,14 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                         ],
                       ),
                       ElevatedButton(
-                        onPressed: _handleSendOrder,
+                        onPressed: () => _handleSendOrder(shouldPrintKOT: false),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
                           foregroundColor: Colors.white,
                           padding: EdgeInsets.symmetric(horizontal: 40.w, vertical: 16.h),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
                         ),
-                        child: Text(_confirmButtonLabel(), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1)),
+                        child: Text(_confirmButtonLabel(withPrint: false), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1)),
                       ),
                     ],
                   ),
@@ -1130,7 +1232,87 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   }
 
   Widget _buildPlaceOrderBtn() {
-    bool disabled = _isSubmitDisabled();
+    final bool disabled = _isSubmitDisabled();
+    final bool canPrint = _canPrintKOT;
+
+    // When KOT printing is enabled: show two buttons (matches JS canPrintKOT flow)
+    if (canPrint) {
+      return Column(
+        children: [
+          // Primary: Place Order + KOT
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: disabled
+                  ? null
+                  : () {
+                      setState(() => _mobileSheetExpanded = false);
+                      _handleSendOrder(shouldPrintKOT: true);
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: disabled ? Colors.grey.shade300 : Colors.deepOrange,
+                foregroundColor: Colors.white,
+                elevation: disabled ? 0 : 8,
+                shadowColor: Colors.deepOrange.withValues(alpha: 0.4),
+                padding: EdgeInsets.symmetric(vertical: 14.h),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(LucideIcons.printer, size: 14.sp),
+                  SizedBox(width: 6.w),
+                  Text(
+                    _confirmButtonLabel(withPrint: true),
+                    style: TextStyle(
+                      fontSize: 12.sp,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: 8.h),
+          // Secondary: Save/Place without KOT
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: disabled
+                  ? null
+                  : () {
+                      setState(() => _mobileSheetExpanded = false);
+                      _handleSendOrder(shouldPrintKOT: false);
+                    },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: disabled ? Colors.grey.shade300 : const Color(0xFF64748B),
+                side: BorderSide(
+                  color: disabled ? Colors.grey.shade200 : const Color(0xFFCBD5E1),
+                  width: 2,
+                ),
+                padding: EdgeInsets.symmetric(vertical: 10.h),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: Text(
+                _confirmButtonLabel(withPrint: false),
+                style: TextStyle(
+                  fontSize: 11.sp,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // No KOT enabled: single button
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
@@ -1138,7 +1320,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             ? null
             : () {
                 setState(() => _mobileSheetExpanded = false);
-                _handleSendOrder();
+                _handleSendOrder(shouldPrintKOT: false);
               },
         style: ElevatedButton.styleFrom(
           backgroundColor: disabled ? Colors.grey.shade300 : Colors.deepOrange,
@@ -1151,7 +1333,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           ),
         ),
         child: Text(
-          _confirmButtonLabel(),
+          _confirmButtonLabel(withPrint: false),
           style: TextStyle(
             fontSize: 12.sp,
             fontWeight: FontWeight.w900,
