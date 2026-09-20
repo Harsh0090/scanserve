@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../services/bluetooth_printer_service.dart';
 import '../../../services/kot_print_service.dart';
 import '../../context/AuthContext.dart';
@@ -251,6 +252,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _scanBluetoothPrinters() async {
     final btService = ref.read(bluetoothPrinterServiceProvider);
+
+    // Request permissions for Android 12+ and older versions
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      await [
+        Permission.bluetooth,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ].request();
+    }
+
     final enabled = await btService.isBluetoothEnabled();
     if (!enabled) {
       if (mounted) {
