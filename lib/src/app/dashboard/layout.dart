@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../components/Sidebar.dart';
+import '../../services/order_alarm_service.dart';
 
 class DashboardLayout extends ConsumerStatefulWidget {
   final Widget child;
@@ -71,8 +72,14 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
       drawer: const Drawer(
         child: Sidebar(),
       ),
-      body: SizedBox.expand(
-        child: widget.child,
+      body: Listener(
+        // Mute the order alarm sound the instant the user touches
+        // anywhere inside the app — even before lifting their finger.
+        onPointerDown: (_) => OrderAlarmService.muteSound(),
+        behavior: HitTestBehavior.translucent,
+        child: SizedBox.expand(
+          child: widget.child,
+        ),
       ),
     );
   }

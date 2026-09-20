@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:developer';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -80,6 +80,15 @@ class OrderAlarmService {
     }
   }
 
+  /// Silences the looping alarm sound immediately without stopping the
+  /// foreground service or sending any Accept/Decline API calls.
+  /// Call this whenever the user taps anywhere inside the app.
+  static Future<void> muteSound() async {
+    if (await FlutterForegroundTask.isRunningService) {
+      FlutterForegroundTask.sendDataToTask({'mute_audio': true});
+    }
+  }
+
   static void addActionCallback(DataCallback callback) {
     FlutterForegroundTask.addTaskDataCallback(callback);
   }
@@ -105,6 +114,14 @@ class OrderAlarmTaskHandler extends TaskHandler {
   void onReceiveData(Object data) {
     if (data is! Map) return;
     final map = Map<String, dynamic>.from(data);
+
+    // User tapped inside the app — silence the sound immediately.
+    if (map['mute_audio'] == true) {
+      log('OrderAlarm: muted by in-app interaction');
+      _stopAudio();
+      return;
+    }
+
     _orderId = map['orderId'] as String?;
     _type    = map['type'] as String? ?? 'NEW';
 
