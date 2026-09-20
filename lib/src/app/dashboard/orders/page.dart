@@ -195,9 +195,18 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
           final items = (newOrder['items'] is List) ? List<dynamic>.from(newOrder['items']) : <dynamic>[];
           if (liveOrderKOT) {
-            _silentPrintKOT(newOrder, items, false);
+            // Skip if this order was already printed locally (e.g. placed via MenuModal)
+            final alreadyPrinted = ref.read(locallyPrintedOrderIds).contains(orderId);
+            if (!alreadyPrinted) {
+              _silentPrintKOT(newOrder, items, false);
+            } else {
+              debugPrint('⚙️ Socket new_order: skipping duplicate print for $orderId (already printed locally)');
+            }
           } else if (autoPrintKOT) {
-            _showKOTToast(newOrder, items, false);
+            final alreadyPrinted = ref.read(locallyPrintedOrderIds).contains(orderId);
+            if (!alreadyPrinted) {
+              _showKOTToast(newOrder, items, false);
+            }
           }
 
           _orders.insert(0, newOrder);

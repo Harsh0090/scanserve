@@ -258,3 +258,8 @@ final kotPrintServiceProvider = Provider<KotPrintService>((ref) {
   final btService = ref.watch(bluetoothPrinterServiceProvider);
   return KotPrintService(btService: btService);
 });
+
+/// Tracks order IDs that were already printed locally by this client.
+/// The socket handler checks this set to avoid printing a KOT twice when
+/// the backend echoes back a new_order event for an order the user just placed.
+final locallyPrintedOrderIds = StateProvider<Set<String>>((ref) => {});
