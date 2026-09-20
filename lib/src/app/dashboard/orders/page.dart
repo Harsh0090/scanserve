@@ -2542,7 +2542,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       _activeFilter = 'All';
     }
 
-    final bool isPayLaterTab = _activeFilter == 'PAY_LATER';
+    final String activeTab = (isFoodTruck && _activeFilter == 'All') ? 'LIVE' : _activeFilter;
+    final bool isServedTab = activeTab == 'SERVED';
+    final bool isPayLaterTab = activeTab == 'PAY_LATER';
+    final bool isLiveTab = activeTab == 'LIVE' || activeTab == 'All';
+    
     final List<Map<String, dynamic>> groupedPayLater = isPayLaterTab ? _getGroupedPayLaterOrders() : [];
 
     List<dynamic> displayList;
@@ -2601,15 +2605,25 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       }).toList();
     }
 
-    final filters = [
-      "All",
-      "NEW",
-      "ACCEPTED",
-      "PREPARING",
-      "READY",
-      "SERVED",
-      "PAY_LATER"
-    ];
+    final filters = isFoodTruck 
+      ? ["LIVE", "SERVED", "PAY_LATER"]
+      : [
+          "All",
+          "NEW",
+          "ACCEPTED",
+          "PREPARING",
+          "READY",
+          "SERVED",
+          "PAY_LATER"
+        ];
+    
+    
+    final List<dynamic> currentList = isPayLaterTab 
+        ? groupedPayLater 
+        : (isLiveTab && isFoodTruck) 
+            ? foodTruckLiveList 
+            : displayList;
+
     final topSelling = _getTopSelling();
 
     return Scaffold(
@@ -2916,9 +2930,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         scrollDirection: Axis.horizontal,
                         child: Row(
                           children: filters.map((f) {
-                            final isActive = _activeFilter == f;
+                            final isActive = activeTab == f;
                             final int count;
-                            if (f == "All" || f == "LIVE") {
+                            if (f == "LIVE") {
+                              count = foodTruckLiveList.length;
+                            } else if (f == "All") {
                               count = _orders.where((o) =>
                                   o is Map &&
                                   o['status'] != 'CANCELLED' &&
@@ -3018,12 +3034,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                       SizedBox(height: 16.h),
 
                       // SERVED PERIOD FILTER BAR
-                      if (_activeFilter == 'SERVED') ...[
+                      if (isServedTab) ...[
                         _buildServedDateFilterBar(),
                       ],
 
                       // TOP SELLING ITEMS
-                      if (_activeFilter == 'SERVED' && topSelling.isNotEmpty)
+                      if (isServedTab && topSelling.isNotEmpty)
                         Container(
                           margin: EdgeInsets.only(bottom: 24.h),
                           padding: EdgeInsets.all(32.r),
@@ -3166,7 +3182,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         ),
 
                       // PAY LATER PENDING BANNER
-                      if (_activeFilter == 'PAY_LATER' && _payLaterOrders.isNotEmpty)
+                      if (isPayLaterTab && _payLaterOrders.isNotEmpty)
                         Container(
                           margin: EdgeInsets.only(top: 16.h, bottom: 8.h),
                           padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
@@ -3210,7 +3226,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         child: CircularProgressIndicator(color: Colors.orange),
                       ),
                     )
-                  : (isPayLaterTab ? groupedPayLater.isEmpty : (isFoodTruck ? foodTruckLiveList : displayList).isEmpty)
+                  : currentList.isEmpty
                   ? SliverFillRemaining(
                       child: Center(
                         child: Column(
@@ -3243,9 +3259,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             Text(
                               isPayLaterTab
                                   ? 'All customers are settled up! 🎉'
-                                  : _activeFilter == 'All'
+                                  : (activeTab == 'All' || activeTab == 'LIVE')
                                   ? 'Kitchen is quiet... Maybe the chef is taking a nap? 💤'
-                                  : 'No orders in $_activeFilter stage.',
+                                  : 'No orders in $activeTab stage.',
                               style: TextStyle(
                                 fontSize: 12.sp,
                                 fontWeight: FontWeight.bold,
@@ -3273,8 +3289,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                       child: _buildPayLaterCustomerCard(context, groupedPayLater[index]),
                                     );
                                   }
-                                  final activeList = isFoodTruck ? foodTruckLiveList : displayList;
-                                  final order = activeList[index];
+                                  final order = currentList[index];
                                   if (order is! Map) return const SizedBox.shrink();
                                   return Padding(
                                     padding: EdgeInsets.only(bottom: 24.h),
@@ -3283,9 +3298,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                         : _buildOrderCard(context, order, authState),
                                   );
                                 },
-                                childCount: isPayLaterTab
-                                    ? groupedPayLater.length
-                                    : (isFoodTruck ? foodTruckLiveList : displayList).length,
+                                childCount: currentList.length,
                               ),
                             )
                           : SliverGrid(
@@ -3300,16 +3313,13 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   if (isPayLaterTab) {
                                     return _buildPayLaterCustomerCard(context, groupedPayLater[index]);
                                   }
-                                  final activeList = isFoodTruck ? foodTruckLiveList : displayList;
-                                  final order = activeList[index];
+                                  final order = currentList[index];
                                   if (order is! Map) return const SizedBox.shrink();
                                   return isFoodTruck
                                       ? _buildFoodTruckOrderCard(context, order)
                                       : _buildOrderCard(context, order, authState);
                                 },
-                                childCount: isPayLaterTab
-                                    ? groupedPayLater.length
-                                    : (isFoodTruck ? foodTruckLiveList : displayList).length,
+                                childCount: currentList.length,
                               ),
                             ),
                     ),
