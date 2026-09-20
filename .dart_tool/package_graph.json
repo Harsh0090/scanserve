@@ -71,7 +71,7 @@
     },
     {
       "name": "permission_handler",
-      "version": "13.0.2",
+      "version": "11.4.0",
       "dependencies": [
         "flutter",
         "meta",
@@ -455,7 +455,7 @@
     },
     {
       "name": "permission_handler_android",
-      "version": "14.1.0",
+      "version": "12.1.0",
       "dependencies": [
         "flutter",
         "permission_handler_platform_interface"

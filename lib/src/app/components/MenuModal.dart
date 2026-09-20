@@ -444,15 +444,11 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         // the socket handler (liveOrderKOT / autoPrintKOT) skips it and
         // doesn't fire a second KOT for the same order.
         if (orderId.isNotEmpty) {
-          ref.read(locallyPrintedOrderIds.notifier).update((s) => {...s, orderId});
+          ref.read(locallyPrintedOrderIds.notifier).add(orderId);
           // Auto-remove after 30 s to avoid unbounded memory growth
           Future.delayed(const Duration(seconds: 30), () {
             if (mounted) {
-              ref.read(locallyPrintedOrderIds.notifier).update((s) {
-                final copy = Set<String>.from(s);
-                copy.remove(orderId);
-                return copy;
-              });
+              ref.read(locallyPrintedOrderIds.notifier).remove(orderId);
             }
           });
         }
