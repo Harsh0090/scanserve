@@ -2755,34 +2755,36 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                     ),
                                   ),
                                 ),
-                                SizedBox(width: 8.w),
-                                ElevatedButton.icon(
-                                  onPressed: () {
-                                    setState(() => _appendTarget = null);
-                                    _scaffoldKey.currentState?.openEndDrawer();
-                                  },
-                                  icon: Icon(LucideIcons.plus, size: 16.sp),
-                                  label: Text(
-                                    'CREATE ORDER',
-                                    style: TextStyle(
-                                      fontSize: 10.sp,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF0F172A),
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(
-                                        12.r,
+                                if (isFoodTruck) ...[
+                                  SizedBox(width: 8.w),
+                                  ElevatedButton.icon(
+                                    onPressed: () {
+                                      setState(() => _appendTarget = null);
+                                      _scaffoldKey.currentState?.openEndDrawer();
+                                    },
+                                    icon: Icon(LucideIcons.plus, size: 16.sp),
+                                    label: Text(
+                                      'CREATE ORDER',
+                                      style: TextStyle(
+                                        fontSize: 10.sp,
+                                        fontWeight: FontWeight.w900,
                                       ),
                                     ),
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 16.w,
-                                      vertical: 14.h,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF0F172A),
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(
+                                          12.r,
+                                        ),
+                                      ),
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: 16.w,
+                                        vertical: 14.h,
+                                      ),
                                     ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ],
@@ -2891,34 +2893,36 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                     ),
                                   ),
                                 ),
-                                SizedBox(width: 12.w),
-                                ElevatedButton.icon(
-                                  onPressed: () {
-                                    setState(() => _appendTarget = null);
-                                    _scaffoldKey.currentState?.openEndDrawer();
-                                  },
-                                  icon: Icon(LucideIcons.plus, size: 16.sp),
-                                  label: Text(
-                                    'CREATE ORDER',
-                                    style: TextStyle(
-                                      fontSize: 12.sp,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF0F172A),
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(
-                                        12.r,
+                                if (isFoodTruck) ...[
+                                  SizedBox(width: 12.w),
+                                  ElevatedButton.icon(
+                                    onPressed: () {
+                                      setState(() => _appendTarget = null);
+                                      _scaffoldKey.currentState?.openEndDrawer();
+                                    },
+                                    icon: Icon(LucideIcons.plus, size: 16.sp),
+                                    label: Text(
+                                      'CREATE ORDER',
+                                      style: TextStyle(
+                                        fontSize: 12.sp,
+                                        fontWeight: FontWeight.w900,
                                       ),
                                     ),
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 20.w,
-                                      vertical: 16.h,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF0F172A),
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(
+                                          12.r,
+                                        ),
+                                      ),
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: 20.w,
+                                        vertical: 16.h,
+                                      ),
                                     ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ],
