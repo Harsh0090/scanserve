@@ -1133,508 +1133,893 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                                     ],
                                   ),
                                 )
-                              : GridView.builder(
-                                  gridDelegate:
-                                      SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: 420.0,
-                                    mainAxisExtent: math.max(185.0, 200.h),
-                                    crossAxisSpacing: 16.w,
-                                    mainAxisSpacing: 16.h,
-                                  ),
-                                  itemCount: filteredItems.length,
-                                  itemBuilder: (ctx, idx) {
-                                    final i = filteredItems[idx];
-                                    final isEditing = _editingItemId == i['_id'];
-                                    final isAvailable = i['isAvailable'] == true;
-                                    final isSkip = i['skipKitchen'] == true;
+                              : LayoutBuilder(
+                                  builder: (ctx, constraints) {
+                                    final int crossAxisCount =
+                                        constraints.maxWidth < 620
+                                            ? 1
+                                            : (constraints.maxWidth < 1100
+                                                ? 2
+                                                : 3);
+                                    final double itemHeight =
+                                        crossAxisCount == 1 ? 200.0 : 215.0;
+                                    final double imgWidth =
+                                        constraints.maxWidth < 450
+                                            ? 100.0
+                                            : (crossAxisCount == 1
+                                                ? 135.0
+                                                : 110.0);
 
-                                    return Container(
-                                      decoration: BoxDecoration(
-                                        color: isAvailable
-                                            ? Colors.white
-                                            : Colors.grey.shade50,
-                                        borderRadius: BorderRadius.circular(24.r),
-                                        border: Border.all(
-                                          color: Colors.grey.shade100,
-                                        ),
-                                        boxShadow: [
-                                          if (isAvailable)
-                                            BoxShadow(
-                                              color: Colors.black.withAlpha(6),
-                                              blurRadius: 10.r,
-                                              offset: Offset(0, 4.h),
-                                            ),
-                                        ],
+                                    return GridView.builder(
+                                      gridDelegate:
+                                          SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: crossAxisCount,
+                                        mainAxisExtent: itemHeight,
+                                        crossAxisSpacing: 16.w,
+                                        mainAxisSpacing: 16.h,
                                       ),
-                                      clipBehavior: Clip.antiAlias,
-                                      child: Row(
-                                        children: [
-                                          // Left Image
-                                          InkWell(
-                                            onTap: () => _openImagePicker(i['_id']),
-                                            child: Container(
-                                              width: 120.w,
-                                              height: double.infinity,
+                                      itemCount: filteredItems.length,
+                                      itemBuilder: (ctx, idx) {
+                                        final i = filteredItems[idx];
+                                        final isEditing =
+                                            _editingItemId == i['_id'];
+                                        final isAvailable =
+                                            i['isAvailable'] == true;
+                                        final isSkip = i['skipKitchen'] == true;
+
+                                        return Container(
+                                          decoration: BoxDecoration(
+                                            color: isAvailable
+                                                ? Colors.white
+                                                : Colors.grey.shade50,
+                                            borderRadius:
+                                                BorderRadius.circular(24.r),
+                                            border: Border.all(
                                               color: Colors.grey.shade100,
-                                              child: Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  if (i['imageUrl'] != null)
-                                                    Image.network(
-                                                      i['imageUrl'],
-                                                      fit: BoxFit.cover,
-                                                      color: isAvailable
-                                                          ? null
-                                                          : Colors.grey,
-                                                      colorBlendMode: isAvailable
-                                                          ? null
-                                                          : BlendMode.saturation,
-                                                    )
-                                                  else
-                                                    Icon(
-                                                      LucideIcons.image,
-                                                      size: 32.sp,
-                                                      color: Colors.black12,
-                                                    ),
-
-                                                  // Off overlay badge
-                                                  if (!isAvailable)
-                                                    Container(
-                                                      color: Colors.black26,
-                                                      child: Center(
-                                                        child: Container(
-                                                          padding: EdgeInsets.symmetric(
-                                                            horizontal: 6.w,
-                                                            vertical: 2.h,
-                                                          ),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.white.withAlpha(230),
-                                                            borderRadius: BorderRadius.circular(6.r),
-                                                          ),
-                                                          child: Text(
-                                                            'OFF',
-                                                            style: TextStyle(
-                                                              fontSize: 8.sp,
-                                                              fontWeight: FontWeight.w900,
-                                                              color: Colors.grey.shade700,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-
-                                                  // No KDS top-left badge
-                                                  if (isSkip)
-                                                    Positioned(
-                                                      top: 6.h,
-                                                      left: 6.w,
-                                                      child: Container(
-                                                        padding: EdgeInsets.symmetric(
-                                                          horizontal: 6.w,
-                                                          vertical: 2.h,
-                                                        ),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(0xFF0F172A),
-                                                          borderRadius: BorderRadius.circular(6.r),
-                                                          boxShadow: const [
-                                                            BoxShadow(
-                                                              color: Colors.black26,
-                                                              blurRadius: 4,
-                                                            ),
-                                                          ],
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            Icon(
-                                                              LucideIcons.bellOff,
-                                                              color: Colors.white,
-                                                              size: 8.sp,
-                                                            ),
-                                                            SizedBox(width: 3.w),
-                                                            Text(
-                                                              'NO KDS',
-                                                              style: TextStyle(
-                                                                fontSize: 7.sp,
-                                                                fontWeight: FontWeight.w900,
-                                                                color: Colors.white,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                ],
-                                              ),
                                             ),
+                                            boxShadow: [
+                                              if (isAvailable)
+                                                BoxShadow(
+                                                  color:
+                                                      Colors.black.withAlpha(6),
+                                                  blurRadius: 10.r,
+                                                  offset: Offset(0, 4.h),
+                                                ),
+                                            ],
                                           ),
-
-                                          // Right Details & Actions
-                                          Expanded(
-                                            child: Padding(
-                                              padding: EdgeInsets.all(12.r),
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  // Category pill
-                                                  Container(
-                                                    padding: EdgeInsets.symmetric(
-                                                      horizontal: 8.w,
-                                                      vertical: 2.h,
-                                                    ),
-                                                    decoration: BoxDecoration(
-                                                      color: isAvailable
-                                                          ? Colors.orange.shade50
-                                                          : Colors.grey.shade200,
-                                                      borderRadius: BorderRadius.circular(6.r),
-                                                    ),
-                                                    child: Text(
-                                                      _getCategoryName(i).toUpperCase(),
-                                                      style: TextStyle(
-                                                        fontSize: 8.sp,
-                                                        fontWeight: FontWeight.w900,
-                                                        color: isAvailable
-                                                            ? const Color(0xFFFF4D00)
-                                                            : Colors.grey,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  SizedBox(height: 4.h),
-
-                                                  // Title
-                                                  if (isEditing)
-                                                    TextField(
-                                                      controller: _editNameController,
-                                                      onChanged: (v) => _editName = v,
-                                                      style: TextStyle(
-                                                        fontSize: 13.sp,
-                                                        fontWeight: FontWeight.w900,
-                                                        color: const Color(0xFF0F172A),
-                                                      ),
-                                                      decoration: InputDecoration(
-                                                        isDense: true,
-                                                        contentPadding: EdgeInsets.zero,
-                                                        border: UnderlineInputBorder(
-                                                          borderSide: BorderSide(
-                                                            color: const Color(0xFFFF4D00),
-                                                            width: 1.w,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    )
-                                                  else
-                                                    Text(
-                                                      (i['name'] ?? '').toString(),
-                                                      style: TextStyle(
-                                                        fontSize: 13.sp,
-                                                        fontWeight: FontWeight.w900,
-                                                        color: isAvailable
-                                                            ? const Color(0xFF0F172A)
-                                                            : Colors.grey,
-                                                      ),
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-
-                                                  SizedBox(height: 2.h),
-
-                                                  // Description
-                                                  if (isEditing)
-                                                    TextField(
-                                                      controller: _editDescriptionController,
-                                                      onChanged: (v) => _editDescription = v,
-                                                      maxLines: 1,
-                                                      style: TextStyle(
-                                                        fontSize: 9.sp,
-                                                        fontWeight: FontWeight.bold,
-                                                        color: Colors.grey.shade700,
-                                                      ),
-                                                      decoration: const InputDecoration(
-                                                        hintText: 'Description...',
-                                                        isDense: true,
-                                                        contentPadding: EdgeInsets.zero,
-                                                        border: InputBorder.none,
-                                                      ),
-                                                    )
-                                                  else
-                                                    Text(
-                                                      (i['description'] ??
-                                                              'Authentic ingredients prepared fresh.')
-                                                          .toString(),
-                                                      style: TextStyle(
-                                                        fontSize: 9.sp,
-                                                        fontWeight: FontWeight.bold,
-                                                        color: Colors.grey,
-                                                      ),
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-
-                                                  SizedBox(height: 4.h),
-
-                                                  // Price
-                                                  if (isEditing)
-                                                    Row(
-                                                      children: [
-                                                        Text(
-                                                          '₹',
-                                                          style: TextStyle(
-                                                            fontSize: 14.sp,
-                                                            fontWeight: FontWeight.w900,
-                                                          ),
-                                                        ),
-                                                        SizedBox(width: 2.w),
-                                                        Expanded(
-                                                          child: TextField(
-                                                            controller: _editPriceController,
-                                                            onChanged: (v) => _editPrice = v,
-                                                            keyboardType: TextInputType.number,
-                                                            style: TextStyle(
-                                                              fontSize: 14.sp,
-                                                              fontWeight: FontWeight.w900,
+                                          clipBehavior: Clip.antiAlias,
+                                          child: Row(
+                                            children: [
+                                              // Left Image
+                                              InkWell(
+                                                onTap: () => _openImagePicker(
+                                                    i['_id']),
+                                                child: Container(
+                                                  width: imgWidth,
+                                                  height: double.infinity,
+                                                  color: Colors.grey.shade100,
+                                                  child: Stack(
+                                                    fit: StackFit.expand,
+                                                    children: [
+                                                      if (i['imageUrl'] != null)
+                                                        Image.network(
+                                                          i['imageUrl'],
+                                                          fit: BoxFit.cover,
+                                                          color: isAvailable
+                                                              ? null
+                                                              : Colors.grey,
+                                                          colorBlendMode:
+                                                              isAvailable
+                                                                  ? null
+                                                                  : BlendMode
+                                                                      .saturation,
+                                                          errorBuilder: (ctx,
+                                                                  err, stack) =>
+                                                              Center(
+                                                            child: Icon(
+                                                              LucideIcons.image,
+                                                              size: 28.sp,
+                                                              color: Colors
+                                                                  .black26,
                                                             ),
-                                                            decoration: InputDecoration(
-                                                              isDense: true,
-                                                              contentPadding: EdgeInsets.zero,
-                                                              border: UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                  color: const Color(0xFFFF4D00),
-                                                                  width: 1.w,
+                                                          ),
+                                                        )
+                                                      else
+                                                        Center(
+                                                          child: Icon(
+                                                            LucideIcons.image,
+                                                            size: 28.sp,
+                                                            color:
+                                                                Colors.black12,
+                                                          ),
+                                                        ),
+
+                                                      // Off overlay badge
+                                                      if (!isAvailable)
+                                                        Container(
+                                                          color: Colors.black26,
+                                                          child: Center(
+                                                            child: Container(
+                                                              padding:
+                                                                  EdgeInsets
+                                                                      .symmetric(
+                                                                horizontal: 6.w,
+                                                                vertical: 2.h,
+                                                             ),
+                                                              decoration:
+                                                                  BoxDecoration(
+                                                                color: Colors
+                                                                    .white
+                                                                    .withAlpha(
+                                                                        230),
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            6.r),
+                                                              ),
+                                                              child: Text(
+                                                                'OFF',
+                                                                style: TextStyle(
+                                                                  fontSize:
+                                                                      8.sp,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w900,
+                                                                  color: Colors
+                                                                      .grey
+                                                                      .shade700,
                                                                 ),
                                                               ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ],
-                                                    )
-                                                  else
-                                                    Text(
-                                                      '₹${i['price'] ?? i['basePrice'] ?? 0}',
-                                                      style: TextStyle(
-                                                        fontSize: 14.sp,
-                                                        fontWeight: FontWeight.w900,
-                                                        color: isAvailable
-                                                            ? const Color(0xFF0F172A)
-                                                            : Colors.grey,
-                                                      ),
-                                                    ),
 
-                                                  const Spacer(),
-
-                                                  // Action Buttons Row 1: Availability + SkipKitchen (No KDS)
-                                                  Row(
-                                                    children: [
-                                                      Expanded(
-                                                        child: InkWell(
-                                                          onTap: () => _toggleItem(i['_id']),
-                                                          borderRadius: BorderRadius.circular(6.r),
+                                                      // No KDS top-left badge
+                                                      if (isSkip)
+                                                        Positioned(
+                                                          top: 6.h,
+                                                          left: 6.w,
                                                           child: Container(
-                                                            padding: EdgeInsets.symmetric(vertical: 4.h),
-                                                            decoration: BoxDecoration(
-                                                              color: isAvailable
-                                                                  ? const Color(0xFFDCFCE7)
-                                                                  : Colors.grey.shade100,
-                                                              borderRadius: BorderRadius.circular(6.r),
+                                                            padding: EdgeInsets
+                                                                .symmetric(
+                                                              horizontal: 6.w,
+                                                              vertical: 2.h,
                                                             ),
-                                                            alignment: Alignment.center,
-                                                            child: Text(
-                                                              isAvailable ? 'Available' : 'Unavailable',
-                                                              style: TextStyle(
-                                                                fontSize: 8.sp,
-                                                                fontWeight: FontWeight.w900,
-                                                                color: isAvailable
-                                                                    ? const Color(0xFF15803D)
-                                                                    : Colors.grey.shade600,
-                                                              ),
+                                                            decoration:
+                                                                BoxDecoration(
+                                                              color: const Color(
+                                                                  0xFF0F172A),
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          6.r),
+                                                              boxShadow: const [
+                                                                BoxShadow(
+                                                                  color: Colors
+                                                                      .black26,
+                                                                  blurRadius: 4,
+                                                                ),
+                                                              ],
                                                             ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                      SizedBox(width: 6.w),
-                                                      Expanded(
-                                                        child: InkWell(
-                                                          onTap: () => _toggleSkipKitchen(i['_id'], isSkip),
-                                                          borderRadius: BorderRadius.circular(6.r),
-                                                          child: Container(
-                                                            padding: EdgeInsets.symmetric(vertical: 4.h),
-                                                            decoration: BoxDecoration(
-                                                              color: isSkip
-                                                                  ? const Color(0xFF0F172A)
-                                                                  : const Color(0xFFFFF7ED),
-                                                              borderRadius: BorderRadius.circular(6.r),
-                                                            ),
-                                                            alignment: Alignment.center,
                                                             child: Row(
-                                                              mainAxisAlignment: MainAxisAlignment.center,
+                                                              mainAxisSize:
+                                                                  MainAxisSize
+                                                                      .min,
                                                               children: [
                                                                 Icon(
-                                                                  isSkip ? LucideIcons.bellOff : LucideIcons.bell,
-                                                                  size: 9.sp,
-                                                                  color: isSkip
-                                                                      ? Colors.white
-                                                                      : const Color(0xFFEA580C),
+                                                                  LucideIcons
+                                                                      .bellOff,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  size: 8.sp,
                                                                 ),
-                                                                SizedBox(width: 3.w),
+                                                                SizedBox(
+                                                                    width: 3.w),
                                                                 Text(
-                                                                  isSkip ? 'No KDS' : 'KDS On',
-                                                                  style: TextStyle(
-                                                                    fontSize: 8.sp,
-                                                                    fontWeight: FontWeight.w900,
-                                                                    color: isSkip
-                                                                        ? Colors.white
-                                                                        : const Color(0xFFEA580C),
+                                                                  'NO KDS',
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        7.sp,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w900,
+                                                                    color: Colors
+                                                                        .white,
                                                                   ),
                                                                 ),
                                                               ],
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
                                                     ],
                                                   ),
-                                                  SizedBox(height: 4.h),
+                                                ),
+                                              ),
 
-                                                  // Action Buttons Row 2: Edit/Save + Delete
-                                                  Row(
+                                              // Right Details & Actions
+                                              Expanded(
+                                                child: Padding(
+                                                  padding: EdgeInsets.all(12.r),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
                                                     children: [
-                                                      Expanded(
-                                                        child: isEditing
-                                                            ? InkWell(
-                                                                onTap: () => _saveEdit(i['_id']),
-                                                                borderRadius: BorderRadius.circular(6.r),
-                                                                child: Container(
-                                                                  padding: EdgeInsets.symmetric(vertical: 4.h),
-                                                                  decoration: BoxDecoration(
-                                                                    color: const Color(0xFF22C55E),
-                                                                    borderRadius: BorderRadius.circular(6.r),
-                                                                  ),
-                                                                  alignment: Alignment.center,
-                                                                  child: Row(
-                                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                                    children: [
-                                                                      Icon(LucideIcons.check, size: 9.sp, color: Colors.white),
-                                                                      SizedBox(width: 3.w),
-                                                                      Text(
-                                                                        'Save',
-                                                                        style: TextStyle(
-                                                                          fontSize: 8.sp,
-                                                                          fontWeight: FontWeight.w900,
-                                                                          color: Colors.white,
-                                                                        ),
-                                                                      ),
-                                                                    ],
-                                                                  ),
+                                                      // Category pill & Price row
+                                                      Row(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .spaceBetween,
+                                                        children: [
+                                                          Flexible(
+                                                            child: Container(
+                                                              padding:
+                                                                  EdgeInsets
+                                                                      .symmetric(
+                                                                horizontal: 8.w,
+                                                                vertical: 2.h,
+                                                              ),
+                                                              decoration:
+                                                                  BoxDecoration(
+                                                                color: isAvailable
+                                                                    ? Colors
+                                                                        .orange
+                                                                        .shade50
+                                                                    : Colors
+                                                                        .grey
+                                                                        .shade200,
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            6.r),
+                                                              ),
+                                                              child: Text(
+                                                                _getCategoryName(
+                                                                        i)
+                                                                    .toUpperCase(),
+                                                                maxLines: 1,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style:
+                                                                    TextStyle(
+                                                                  fontSize:
+                                                                      8.sp,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w900,
+                                                                  color: isAvailable
+                                                                      ? const Color(
+                                                                          0xFFFF4D00)
+                                                                      : Colors
+                                                                          .grey,
                                                                 ),
-                                                              )
-                                                            : InkWell(
-                                                                onTap: () {
-                                                                  setState(() {
-                                                                    _editingItemId = i['_id'];
-                                                                    _editName = i['name'] ?? '';
-                                                                    _editPrice = (i['price'] ?? i['basePrice'] ?? 0).toString();
-                                                                    _editDescription = i['description'] ?? '';
-                                                                    _editNameController.text = _editName;
-                                                                    _editPriceController.text = _editPrice;
-                                                                    _editDescriptionController.text = _editDescription;
-                                                                  });
-                                                                },
-                                                                borderRadius: BorderRadius.circular(6.r),
-                                                                child: Container(
-                                                                  padding: EdgeInsets.symmetric(vertical: 4.h),
-                                                                  decoration: BoxDecoration(
-                                                                    color: const Color(0xFF0F172A),
-                                                                    borderRadius: BorderRadius.circular(6.r),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          SizedBox(width: 6.w),
+                                                          if (!isEditing)
+                                                            Text(
+                                                              '₹${i['price'] ?? i['basePrice'] ?? 0}',
+                                                              style: TextStyle(
+                                                                fontSize: 14.sp,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w900,
+                                                                color: isAvailable
+                                                                    ? const Color(
+                                                                        0xFF0F172A)
+                                                                    : Colors
+                                                                        .grey,
+                                                              ),
+                                                            )
+                                                          else
+                                                            SizedBox(
+                                                              width: 70.w,
+                                                              child: Row(
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                children: [
+                                                                  Text(
+                                                                    '₹',
+                                                                    style: TextStyle(
+                                                                        fontSize:
+                                                                            13.sp,
+                                                                        fontWeight:
+                                                                            FontWeight.w900),
                                                                   ),
-                                                                  alignment: Alignment.center,
-                                                                  child: Row(
-                                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                                    children: [
-                                                                      Icon(LucideIcons.edit3, size: 9.sp, color: Colors.white),
-                                                                      SizedBox(width: 3.w),
-                                                                      Text(
-                                                                        'Edit',
-                                                                        style: TextStyle(
-                                                                          fontSize: 8.sp,
-                                                                          fontWeight: FontWeight.w900,
-                                                                          color: Colors.white,
+                                                                  SizedBox(
+                                                                      width:
+                                                                          2.w),
+                                                                  Expanded(
+                                                                    child:
+                                                                        TextField(
+                                                                      controller:
+                                                                          _editPriceController,
+                                                                      onChanged: (v) =>
+                                                                          _editPrice =
+                                                                              v,
+                                                                      keyboardType:
+                                                                          TextInputType
+                                                                              .number,
+                                                                      style: TextStyle(
+                                                                          fontSize:
+                                                                              13.sp,
+                                                                          fontWeight:
+                                                                              FontWeight.w900),
+                                                                      decoration:
+                                                                          InputDecoration(
+                                                                        isDense:
+                                                                            true,
+                                                                        contentPadding:
+                                                                            EdgeInsets.symmetric(vertical: 2.h),
+                                                                        border:
+                                                                            UnderlineInputBorder(
+                                                                          borderSide:
+                                                                              BorderSide(
+                                                                            color:
+                                                                                const Color(0xFFFF4D00),
+                                                                            width:
+                                                                                1.w,
+                                                                          ),
                                                                         ),
                                                                       ),
-                                                                    ],
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                      SizedBox(height: 4.h),
+
+                                                      // Title
+                                                      if (isEditing)
+                                                        TextField(
+                                                          controller:
+                                                              _editNameController,
+                                                          onChanged: (v) =>
+                                                              _editName = v,
+                                                          style: TextStyle(
+                                                            fontSize: 13.sp,
+                                                            fontWeight:
+                                                                FontWeight.w900,
+                                                            color: const Color(
+                                                                0xFF0F172A),
+                                                          ),
+                                                          decoration:
+                                                              InputDecoration(
+                                                            isDense: true,
+                                                            contentPadding:
+                                                                EdgeInsets
+                                                                    .symmetric(
+                                                              vertical: 2.h,
+                                                            ),
+                                                            border:
+                                                                UnderlineInputBorder(
+                                                              borderSide:
+                                                                  BorderSide(
+                                                                color: const Color(
+                                                                    0xFFFF4D00),
+                                                                width: 1.w,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        )
+                                                      else
+                                                        Text(
+                                                          (i['name'] ?? '')
+                                                              .toString(),
+                                                          style: TextStyle(
+                                                            fontSize: 13.sp,
+                                                            fontWeight:
+                                                                FontWeight.w900,
+                                                            color: isAvailable
+                                                                ? const Color(
+                                                                    0xFF0F172A)
+                                                                : Colors.grey,
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+
+                                                      SizedBox(height: 2.h),
+
+                                                      // Description
+                                                      if (isEditing)
+                                                        TextField(
+                                                          controller:
+                                                              _editDescriptionController,
+                                                          onChanged: (v) =>
+                                                              _editDescription =
+                                                                  v,
+                                                          maxLines: 1,
+                                                          style: TextStyle(
+                                                            fontSize: 9.sp,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            color: Colors
+                                                                .grey.shade700,
+                                                          ),
+                                                          decoration:
+                                                              const InputDecoration(
+                                                            hintText:
+                                                                'Description...',
+                                                            isDense: true,
+                                                            contentPadding:
+                                                                EdgeInsets.zero,
+                                                            border:
+                                                                InputBorder.none,
+                                                          ),
+                                                        )
+                                                      else
+                                                        Text(
+                                                          (i['description'] ??
+                                                                  'Authentic ingredients prepared fresh.')
+                                                              .toString(),
+                                                          style: TextStyle(
+                                                            fontSize: 9.sp,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            color: Colors.grey,
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+
+                                                      const Spacer(),
+
+                                                      // Action Buttons Row 1: Availability + SkipKitchen (No KDS)
+                                                      Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child: InkWell(
+                                                              onTap: () =>
+                                                                  _toggleItem(
+                                                                      i['_id']),
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          6.r),
+                                                              child: Container(
+                                                                padding: EdgeInsets
+                                                                    .symmetric(
+                                                                  vertical: 5.h,
+                                                                  horizontal:
+                                                                      4.w,
+                                                                ),
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: isAvailable
+                                                                      ? const Color(
+                                                                          0xFFDCFCE7)
+                                                                      : Colors
+                                                                          .grey
+                                                                          .shade100,
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              6.r),
+                                                                ),
+                                                                alignment:
+                                                                    Alignment
+                                                                        .center,
+                                                                child: Text(
+                                                                  isAvailable
+                                                                      ? 'Available'
+                                                                      : 'Unavailable',
+                                                                  maxLines: 1,
+                                                                  overflow:
+                                                                      TextOverflow
+                                                                          .ellipsis,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        8.5.sp,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w900,
+                                                                    color: isAvailable
+                                                                        ? const Color(
+                                                                            0xFF15803D)
+                                                                        : Colors
+                                                                            .grey
+                                                                            .shade600,
                                                                   ),
                                                                 ),
                                                               ),
-                                                      ),
-                                                      SizedBox(width: 6.w),
-                                                      Expanded(
-                                                        child: InkWell(
-                                                          onTap: () => _deleteItem(i['_id']),
-                                                          borderRadius: BorderRadius.circular(6.r),
-                                                          child: Container(
-                                                            padding: EdgeInsets.symmetric(vertical: 4.h),
-                                                            decoration: BoxDecoration(
-                                                              color: const Color(0xFFFEF2F2),
-                                                              borderRadius: BorderRadius.circular(6.r),
-                                                            ),
-                                                            alignment: Alignment.center,
-                                                            child: Row(
-                                                              mainAxisAlignment: MainAxisAlignment.center,
-                                                              children: [
-                                                                Icon(LucideIcons.trash2, size: 9.sp, color: const Color(0xFFEF4444)),
-                                                                SizedBox(width: 3.w),
-                                                                Text(
-                                                                  'Delete',
-                                                                  style: TextStyle(
-                                                                    fontSize: 8.sp,
-                                                                    fontWeight: FontWeight.w900,
-                                                                    color: const Color(0xFFEF4444),
-                                                                  ),
-                                                                ),
-                                                              ],
                                                             ),
                                                           ),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  SizedBox(height: 4.h),
-
-                                                  // Action Buttons Row 3: Recipe Builder
-                                                  InkWell(
-                                                    onTap: () => _openRecipeModal(i),
-                                                    borderRadius: BorderRadius.circular(6.r),
-                                                    child: Container(
-                                                      width: double.infinity,
-                                                      padding: EdgeInsets.symmetric(vertical: 4.h),
-                                                      decoration: BoxDecoration(
-                                                        color: const Color(0xFFFFF7ED),
-                                                        borderRadius: BorderRadius.circular(6.r),
-                                                        border: Border.all(color: const Color(0xFFFFEDD5)),
-                                                      ),
-                                                      alignment: Alignment.center,
-                                                      child: Row(
-                                                        mainAxisAlignment: MainAxisAlignment.center,
-                                                        children: [
-                                                          Icon(LucideIcons.package, size: 9.sp, color: const Color(0xFFEA580C)),
-                                                          SizedBox(width: 4.w),
-                                                          Text(
-                                                            'Recipe Builder',
-                                                            style: TextStyle(
-                                                              fontSize: 8.sp,
-                                                              fontWeight: FontWeight.w900,
-                                                              color: const Color(0xFFEA580C),
-                                                              letterSpacing: 0.5,
+                                                          SizedBox(width: 6.w),
+                                                          Expanded(
+                                                            child: InkWell(
+                                                              onTap: () =>
+                                                                  _toggleSkipKitchen(
+                                                                      i['_id'],
+                                                                      isSkip),
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          6.r),
+                                                              child: Container(
+                                                                padding: EdgeInsets
+                                                                    .symmetric(
+                                                                  vertical: 5.h,
+                                                                  horizontal:
+                                                                      4.w,
+                                                                ),
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: isSkip
+                                                                      ? const Color(
+                                                                          0xFF0F172A)
+                                                                      : const Color(
+                                                                          0xFFFFF7ED),
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              6.r),
+                                                                ),
+                                                                alignment:
+                                                                    Alignment
+                                                                        .center,
+                                                                child: Row(
+                                                                  mainAxisAlignment:
+                                                                      MainAxisAlignment
+                                                                          .center,
+                                                                  mainAxisSize:
+                                                                      MainAxisSize
+                                                                          .min,
+                                                                  children: [
+                                                                    Icon(
+                                                                      isSkip
+                                                                          ? LucideIcons
+                                                                              .bellOff
+                                                                          : LucideIcons
+                                                                              .bell,
+                                                                      size: 9.sp,
+                                                                      color: isSkip
+                                                                          ? Colors
+                                                                              .white
+                                                                          : const Color(
+                                                                              0xFFEA580C),
+                                                                    ),
+                                                                    SizedBox(
+                                                                        width:
+                                                                            3.w),
+                                                                    Flexible(
+                                                                      child:
+                                                                          Text(
+                                                                        isSkip
+                                                                            ? 'No KDS'
+                                                                            : 'KDS On',
+                                                                        maxLines:
+                                                                            1,
+                                                                        overflow:
+                                                                            TextOverflow
+                                                                                .ellipsis,
+                                                                        style:
+                                                                            TextStyle(
+                                                                          fontSize:
+                                                                              8.5.sp,
+                                                                          fontWeight:
+                                                                              FontWeight.w900,
+                                                                          color: isSkip
+                                                                              ? Colors.white
+                                                                              : const Color(0xFFEA580C),
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              ),
                                                             ),
                                                           ),
                                                         ],
                                                       ),
-                                                    ),
+                                                      SizedBox(height: 5.h),
+
+                                                      // Action Buttons Row 2: Edit/Save + Delete
+                                                      Row(
+                                                        children: [
+                                                          Expanded(
+                                                            child: isEditing
+                                                                ? InkWell(
+                                                                    onTap: () =>
+                                                                        _saveEdit(
+                                                                            i['_id']),
+                                                                    borderRadius:
+                                                                        BorderRadius
+                                                                            .circular(
+                                                                                6.r),
+                                                                    child:
+                                                                        Container(
+                                                                      padding: EdgeInsets
+                                                                          .symmetric(
+                                                                        vertical:
+                                                                            5.h,
+                                                                        horizontal:
+                                                                            4.w,
+                                                                      ),
+                                                                      decoration:
+                                                                          BoxDecoration(
+                                                                        color: const Color(
+                                                                            0xFF22C55E),
+                                                                        borderRadius:
+                                                                            BorderRadius.circular(6.r),
+                                                                      ),
+                                                                      alignment:
+                                                                          Alignment
+                                                                              .center,
+                                                                      child:
+                                                                          Row(
+                                                                        mainAxisAlignment:
+                                                                            MainAxisAlignment.center,
+                                                                        mainAxisSize:
+                                                                            MainAxisSize.min,
+                                                                        children: [
+                                                                          Icon(
+                                                                              LucideIcons.check,
+                                                                              size:
+                                                                                  9.sp,
+                                                                              color:
+                                                                                  Colors.white),
+                                                                          SizedBox(
+                                                                              width:
+                                                                                  3.w),
+                                                                          Flexible(
+                                                                            child:
+                                                                                Text(
+                                                                              'Save',
+                                                                              maxLines: 1,
+                                                                              overflow: TextOverflow.ellipsis,
+                                                                              style: TextStyle(
+                                                                                fontSize: 8.5.sp,
+                                                                                fontWeight: FontWeight.w900,
+                                                                                color: Colors.white,
+                                                                              ),
+                                                                            ),
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                  )
+                                                                : InkWell(
+                                                                    onTap: () {
+                                                                      setState(
+                                                                          () {
+                                                                        _editingItemId =
+                                                                            i['_id'];
+                                                                        _editName =
+                                                                            i['name'] ?? '';
+                                                                        _editPrice =
+                                                                            (i['price'] ?? i['basePrice'] ?? 0).toString();
+                                                                        _editDescription =
+                                                                            i['description'] ?? '';
+                                                                        _editNameController
+                                                                                .text =
+                                                                            _editName;
+                                                                        _editPriceController
+                                                                                .text =
+                                                                            _editPrice;
+                                                                        _editDescriptionController
+                                                                                .text =
+                                                                            _editDescription;
+                                                                      });
+                                                                    },
+                                                                    borderRadius:
+                                                                        BorderRadius
+                                                                            .circular(
+                                                                                6.r),
+                                                                    child:
+                                                                        Container(
+                                                                      padding: EdgeInsets
+                                                                          .symmetric(
+                                                                        vertical:
+                                                                            5.h,
+                                                                        horizontal:
+                                                                            4.w,
+                                                                      ),
+                                                                      decoration:
+                                                                          BoxDecoration(
+                                                                        color: const Color(
+                                                                            0xFF0F172A),
+                                                                        borderRadius:
+                                                                            BorderRadius.circular(6.r),
+                                                                      ),
+                                                                      alignment:
+                                                                          Alignment
+                                                                              .center,
+                                                                      child:
+                                                                          Row(
+                                                                        mainAxisAlignment:
+                                                                            MainAxisAlignment.center,
+                                                                        mainAxisSize:
+                                                                            MainAxisSize.min,
+                                                                        children: [
+                                                                          Icon(
+                                                                              LucideIcons.edit3,
+                                                                              size:
+                                                                                  9.sp,
+                                                                              color:
+                                                                                  Colors.white),
+                                                                          SizedBox(
+                                                                              width:
+                                                                                  3.w),
+                                                                          Flexible(
+                                                                            child:
+                                                                                Text(
+                                                                              'Edit',
+                                                                              maxLines: 1,
+                                                                              overflow: TextOverflow.ellipsis,
+                                                                              style: TextStyle(
+                                                                                fontSize: 8.5.sp,
+                                                                                fontWeight: FontWeight.w900,
+                                                                                color: Colors.white,
+                                                                              ),
+                                                                            ),
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                          ),
+                                                          SizedBox(width: 6.w),
+                                                          Expanded(
+                                                            child: InkWell(
+                                                              onTap: () =>
+                                                                  _deleteItem(
+                                                                      i['_id']),
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          6.r),
+                                                              child: Container(
+                                                                padding: EdgeInsets
+                                                                    .symmetric(
+                                                                  vertical: 5.h,
+                                                                  horizontal:
+                                                                      4.w,
+                                                                ),
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: const Color(
+                                                                      0xFFFEF2F2),
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              6.r),
+                                                                ),
+                                                                alignment:
+                                                                    Alignment
+                                                                        .center,
+                                                                child: Row(
+                                                                  mainAxisAlignment:
+                                                                      MainAxisAlignment
+                                                                          .center,
+                                                                  mainAxisSize:
+                                                                      MainAxisSize
+                                                                          .min,
+                                                                  children: [
+                                                                    Icon(
+                                                                        LucideIcons
+                                                                            .trash2,
+                                                                        size:
+                                                                            9.sp,
+                                                                        color: const Color(
+                                                                            0xFFEF4444)),
+                                                                    SizedBox(
+                                                                        width:
+                                                                            3.w),
+                                                                    Flexible(
+                                                                      child:
+                                                                          Text(
+                                                                        'Delete',
+                                                                        maxLines:
+                                                                            1,
+                                                                        overflow:
+                                                                            TextOverflow
+                                                                                .ellipsis,
+                                                                        style:
+                                                                            TextStyle(
+                                                                          fontSize:
+                                                                              8.5.sp,
+                                                                          fontWeight:
+                                                                              FontWeight.w900,
+                                                                          color: const Color(0xFFEF4444),
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      SizedBox(height: 5.h),
+
+                                                      // Action Buttons Row 3: Recipe Builder
+                                                      InkWell(
+                                                        onTap: () =>
+                                                            _openRecipeModal(i),
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(6.r),
+                                                        child: Container(
+                                                          width:
+                                                              double.infinity,
+                                                          padding: EdgeInsets
+                                                              .symmetric(
+                                                                  vertical:
+                                                                      5.h),
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            color: const Color(
+                                                                0xFFFFF7ED),
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        6.r),
+                                                            border: Border.all(
+                                                                color: const Color(
+                                                                    0xFFFFEDD5)),
+                                                          ),
+                                                          alignment:
+                                                              Alignment.center,
+                                                          child: Row(
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .center,
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Icon(
+                                                                  LucideIcons
+                                                                      .package,
+                                                                  size: 9.sp,
+                                                                  color: const Color(
+                                                                      0xFFEA580C)),
+                                                              SizedBox(
+                                                                  width: 4.w),
+                                                              Flexible(
+                                                                child: Text(
+                                                                  'Recipe Builder',
+                                                                  maxLines: 1,
+                                                                  overflow:
+                                                                      TextOverflow
+                                                                          .ellipsis,
+                                                                  style:
+                                                                      TextStyle(
+                                                                    fontSize:
+                                                                        8.5.sp,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w900,
+                                                                    color: const Color(
+                                                                        0xFFEA580C),
+                                                                    letterSpacing:
+                                                                        0.5,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
-                                                ],
+                                                ),
                                               ),
-                                            ),
+                                            ],
                                           ),
-                                        ],
-                                      ),
+                                        );
+                                      },
                                     );
                                   },
                                 ),
@@ -1653,7 +2038,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
 
   Widget _buildCategoryDrawerConfig({required bool isDrawer}) {
     return Container(
-      width: isDrawer ? null : 300.w,
+      width: isDrawer ? null : 260.0,
       height: double.infinity,
       padding: EdgeInsets.all(24.r),
       decoration: BoxDecoration(
