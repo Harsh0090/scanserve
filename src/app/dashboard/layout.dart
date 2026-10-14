@@ -3,6 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../components/Sidebar.dart';
+import '../../services/order_alarm_service.dart';
+
+// ─── Breakpoint ────────────────────────────────────────────────────────────
+// Screens with a logical width ≥ 768 dp are treated as "tablet" mode.
+const double _kTabletBreakpoint = 768.0;
 
 class DashboardLayout extends ConsumerStatefulWidget {
   final Widget child;
@@ -17,6 +22,54 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final bool isTablet = screenWidth >= _kTabletBreakpoint;
+
+    return isTablet ? _buildTabletLayout() : _buildMobileLayout();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TABLET LAYOUT
+  // Persistent sidebar on the left, main content on the right.
+  // No Drawer, no AppBar hamburger.
+  // ─────────────────────────────────────────────────────────────────────────
+  Widget _buildTabletLayout() {
+    return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: const Color(0xFFF9FAFB),
+      body: Listener(
+        onPointerDown: (_) => OrderAlarmService.muteSound(),
+        behavior: HitTestBehavior.translucent,
+        child: Row(
+          children: [
+            // ── Persistent sidebar ──────────────────────────────────────
+            SizedBox(
+              width: 240,
+              child: const Sidebar(isInline: true),
+            ),
+
+            // ── Thin divider ─────────────────────────────────────────────
+            Container(
+              width: 1,
+              color: const Color(0xFFEFF2F4),
+            ),
+
+            // ── Main content ─────────────────────────────────────────────
+            Expanded(
+              child: SizedBox.expand(
+                child: widget.child,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // MOBILE LAYOUT  (original drawer-based layout, unchanged)
+  // ─────────────────────────────────────────────────────────────────────────
+  Widget _buildMobileLayout() {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF9FAFB),
@@ -69,12 +122,15 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
         ),
       ),
       drawer: const Drawer(
-        child: Sidebar(),
+        child: Sidebar(isInline: false),
       ),
-      body: SizedBox.expand(
-        child: widget.child,
+      body: Listener(
+        onPointerDown: (_) => OrderAlarmService.muteSound(),
+        behavior: HitTestBehavior.translucent,
+        child: SizedBox.expand(
+          child: widget.child,
+        ),
       ),
     );
   }
 }
-

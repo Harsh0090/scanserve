@@ -341,7 +341,7 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
 
                     LayoutBuilder(
                       builder: (ctx, constraints) {
-                        final isMobile = constraints.maxWidth < 800.w;
+                        final isMobile = constraints.maxWidth < 768;
                         return Flex(
                           direction: isMobile ? Axis.vertical : Axis.horizontal,
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1033,3 +1033,4 @@ class _ManagePlanPageState extends ConsumerState<ManagePlanPage> {
     );
   }
 }
+

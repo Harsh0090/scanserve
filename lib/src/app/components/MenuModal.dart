@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -577,363 +578,576 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         width: double.infinity,
         height: double.infinity,
         color: Colors.white,
-        child: Stack(
-          children: [
-            Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= 800;
+
+            return Stack(
               children: [
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          GestureDetector(
-                            onTap: widget.onClose,
-                            child: Container(
-                              padding: EdgeInsets.all(8.r),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(LucideIcons.arrowLeft, size: 18.sp),
+                Column(
+                  children: [
+                    _buildHeader(),
+                    if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                      _buildCustomerDetailsInputs(),
+                    Expanded(
+                      child: isWide
+                          ? Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    children: [
+                                      _buildSearchAndCategories(),
+                                      Expanded(
+                                        child: _buildItemsGrid(
+                                          filteredItems,
+                                          isWide: true,
+                                          constraints: constraints,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                _buildWideOrderPanel(constraints),
+                              ],
+                            )
+                          : Column(
+                              children: [
+                                _buildSearchAndCategories(),
+                                Expanded(
+                                  child: _buildItemsGrid(
+                                    filteredItems,
+                                    isWide: false,
+                                    constraints: constraints,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                          SizedBox(width: 12.w),
+                    ),
+                  ],
+                ),
+
+                if (!isWide && showOrderPanel && (_cart.isNotEmpty || _existingItems.isNotEmpty))
+                  _buildBottomSheet(),
+
+                if (!isWide && widget.onCartConfirmed != null && _cart.isNotEmpty)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: EdgeInsets.all(24.r),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(32.r)),
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 40)],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              Text("SELECTED", style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.grey, letterSpacing: 1)),
+                              Text("₹${_newItemsTotal()}", style: TextStyle(fontSize: 24.sp, fontWeight: FontWeight.w900, color: Colors.black)),
+                            ],
+                          ),
+                          ElevatedButton(
+                            onPressed: () => _handleSendOrder(shouldPrintKOT: false),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(horizontal: 40.w, vertical: 16.h),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                            ),
+                            child: Text(_confirmButtonLabel(withPrint: false), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                if (_showQR && _qrData != null)
+                  _buildQRModal(),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              GestureDetector(
+                onTap: widget.onClose,
+                child: Container(
+                  padding: EdgeInsets.all(8.r),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(LucideIcons.arrowLeft, size: 18.sp),
+                ),
+              ),
+              SizedBox(width: 12.w),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.onCartConfirmed != null
+                        ? "ADD ITEMS TO VOICE ORDER"
+                        : _isExistingOrder
+                            ? "TABLE ${widget.table?['tableName'] ?? widget.sendAppendOrder?['customerName'] ?? ""}"
+                            : _mode == "restaurant"
+                                ? "TABLE ${widget.table?['tableName'] ?? ""}"
+                                : "QUICK ORDER",
+                    style: TextStyle(
+                      fontSize: 16.sp,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  if (widget.onCartConfirmed != null)
+                    Text(
+                      "SELECT ITEMS → TAP DONE TO ADD",
+                      style: TextStyle(
+                        fontSize: 8.sp,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  if (_isExistingOrder && widget.onCartConfirmed == null)
+                    Text(
+                      "ORDER #${widget.sendAppendOrder!['currentOrderId']?.toString().substring(widget.sendAppendOrder!['currentOrderId'].toString().length - 4).toUpperCase()} — EDITING",
+                      style: TextStyle(
+                        fontSize: 8.sp,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepOrange,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              if (widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                GestureDetector(
+                  onTap: () async {
+                    final next = !_nameEnabled;
+                    setState(() {
+                      _nameEnabled = next;
+                      if (!next) {
+                        _customerName = "";
+                        _customerPhone = "";
+                      }
+                    });
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('customerDetailsEnabled', next);
+                  },
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                    decoration: BoxDecoration(
+                      color: _nameEnabled ? Colors.orange.shade50 : Colors.grey.shade50,
+                      border: Border.all(color: _nameEnabled ? Colors.orange.shade200 : Colors.grey.shade200),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.user, size: 13.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
+                        SizedBox(width: 6.w),
+                        Icon(_nameEnabled ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
+                      ],
+                    ),
+                  ),
+                ),
+              SizedBox(width: 8.w),
+              GestureDetector(
+                onTap: widget.onClose,
+                child: Padding(
+                  padding: EdgeInsets.all(8.r),
+                  child: Icon(LucideIcons.x, size: 24.sp, color: Colors.grey),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCustomerDetailsInputs() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildInput('Customer Name (optional)', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
+          ),
+          SizedBox(width: 12.w),
+          Expanded(
+            child: _buildInput('Phone (optional)', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchAndCategories() {
+    return Container(
+      color: Colors.white,
+      padding: EdgeInsets.all(16.w),
+      child: Column(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12.r),
+            ),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (val) => setState(() => _searchQuery = val),
+              style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                hintText: "Search items...",
+                hintStyle: TextStyle(color: Colors.grey.shade400),
+                prefixIcon: Icon(LucideIcons.search, size: 16.sp, color: Colors.grey.shade400),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(LucideIcons.x, size: 16.sp, color: Colors.grey.shade400),
+                        onPressed: () {
+                          setState(() {
+                            _searchQuery = "";
+                            _searchController.clear();
+                          });
+                        },
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
+              ),
+            ),
+          ),
+          SizedBox(height: 12.h),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: [
+                _buildCategoryPill('All', 'ALL'),
+                ..._categories.map((cat) => _buildCategoryPill(cat['_id'], cat['name'])),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemsGrid(
+    List<dynamic> filteredItems, {
+    required bool isWide,
+    required BoxConstraints constraints,
+  }) {
+    return Container(
+      color: Colors.grey.shade50,
+      padding: EdgeInsets.symmetric(horizontal: 16.w).copyWith(
+        bottom: isWide ? 24.h : 140.h,
+      ),
+      child: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+          : filteredItems.isEmpty
+              ? const Center(
+                  child: Text('No items found', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                )
+              : GridView.builder(
+                  padding: EdgeInsets.only(top: 8.h),
+                  physics: const BouncingScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: isWide ? 220.0 : 200.0,
+                    mainAxisExtent: math.max(88.0, 90.h),
+                    mainAxisSpacing: 10.h,
+                    crossAxisSpacing: 10.w,
+                  ),
+                  itemCount: filteredItems.length,
+                  itemBuilder: (ctx, idx) {
+                    final item = filteredItems[idx];
+                    final qty = _cart[item['_id']]?['quantity'] ?? 0;
+                    return Container(
+                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12.r),
+                        border: Border.all(
+                          color: qty > 0 ? const Color(0xFFFF5C00) : Colors.grey.shade200,
+                          width: qty > 0 ? 1.5 : 1.0,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Item Name (takes full width of card)
+                          Text(
+                            (item['name'] ?? '').toString().toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 10.5.sp,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black87,
+                              height: 1.15,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          // Bottom row: Price on left, Add/Qty on right
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
                               Text(
-                                widget.onCartConfirmed != null
-                                    ? "ADD ITEMS TO VOICE ORDER"
-                                    : _isExistingOrder
-                                        ? "TABLE ${widget.table?['tableName'] ?? widget.sendAppendOrder?['customerName'] ?? ""}"
-                                        : _mode == "restaurant"
-                                            ? "TABLE ${widget.table?['tableName'] ?? ""}"
-                                            : "QUICK ORDER",
+                                '₹${item['basePrice']}',
                                 style: TextStyle(
-                                  fontSize: 16.sp,
+                                  fontSize: 13.sp,
                                   fontWeight: FontWeight.w900,
-                                  color: Colors.black,
-                                  letterSpacing: -0.5,
+                                  color: Colors.blueGrey.shade800,
                                 ),
                               ),
-                              if (widget.onCartConfirmed != null)
-                                Text(
-                                  "SELECT ITEMS → TAP DONE TO ADD",
-                                  style: TextStyle(
-                                    fontSize: 8.sp,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.orange,
-                                    letterSpacing: 1,
+                              if (qty > 0)
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black87,
+                                    borderRadius: BorderRadius.circular(8.r),
                                   ),
-                                ),
-                              if (_isExistingOrder && widget.onCartConfirmed == null)
-                                Text(
-                                  "ORDER #${widget.sendAppendOrder!['currentOrderId']?.toString().substring(widget.sendAppendOrder!['currentOrderId'].toString().length - 4).toUpperCase()} — EDITING",
-                                  style: TextStyle(
-                                    fontSize: 8.sp,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.deepOrange,
-                                    letterSpacing: 1,
+                                  padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 3.h),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () => _updateQuantity(item, -1),
+                                        child: Padding(
+                                          padding: EdgeInsets.all(2.r),
+                                          child: Icon(LucideIcons.minus, size: 12.sp, color: Colors.white),
+                                        ),
+                                      ),
+                                      Padding(
+                                        padding: EdgeInsets.symmetric(horizontal: 4.w),
+                                        child: Text(
+                                          '$qty',
+                                          style: TextStyle(
+                                            fontSize: 11.5.sp,
+                                            fontWeight: FontWeight.w900,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                      GestureDetector(
+                                        onTap: () => _updateQuantity(item, 1),
+                                        child: Padding(
+                                          padding: EdgeInsets.all(2.r),
+                                          child: Icon(LucideIcons.plus, size: 12.sp, color: Colors.white),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              else
+                                GestureDetector(
+                                  onTap: () => _updateQuantity(item, 1),
+                                  child: Container(
+                                    padding: EdgeInsets.all(6.r),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(8.r),
+                                    ),
+                                    child: Icon(LucideIcons.plus, size: 13.sp, color: Colors.grey.shade700),
                                   ),
                                 ),
                             ],
                           ),
                         ],
                       ),
-                      Row(
-                        children: [
-                          if (widget.sendAppendOrder == null && widget.onCartConfirmed == null)
-                            GestureDetector(
-                              onTap: () async {
-                                final next = !_nameEnabled;
-                                setState(() {
-                                  _nameEnabled = next;
-                                  if (!next) {
-                                    _customerName = "";
-                                    _customerPhone = "";
-                                  }
-                                });
-                                final prefs = await SharedPreferences.getInstance();
-                                await prefs.setBool('customerDetailsEnabled', next);
-                              },
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                                decoration: BoxDecoration(
-                                  color: _nameEnabled ? Colors.orange.shade50 : Colors.grey.shade50,
-                                  border: Border.all(color: _nameEnabled ? Colors.orange.shade200 : Colors.grey.shade200),
-                                  borderRadius: BorderRadius.circular(12.r),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(LucideIcons.user, size: 13.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
-                                    SizedBox(width: 6.w),
-                                    Icon(_nameEnabled ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          SizedBox(width: 8.w),
-                          GestureDetector(
-                            onTap: widget.onClose,
-                            child: Padding(
-                              padding: EdgeInsets.all(8.r),
-                              child: Icon(LucideIcons.x, size: 24.sp, color: Colors.grey),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
+    );
+  }
 
-                if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                    decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _buildInput('Customer Name (optional)', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
-                        ),
-                        SizedBox(width: 12.w),
-                        Expanded(
-                          child: _buildInput('Phone (optional)', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                Container(
-                  color: Colors.white,
-                  padding: EdgeInsets.all(16.w),
-                  child: Column(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(12.r),
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          onChanged: (val) => setState(() => _searchQuery = val),
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.bold),
-                          decoration: InputDecoration(
-                            hintText: "Search items...",
-                            hintStyle: TextStyle(color: Colors.grey.shade400),
-                            prefixIcon: Icon(LucideIcons.search, size: 16.sp, color: Colors.grey.shade400),
-                            suffixIcon: _searchQuery.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(LucideIcons.x, size: 16.sp, color: Colors.grey.shade400),
-                                    onPressed: () {
-                                      setState(() {
-                                        _searchQuery = "";
-                                        _searchController.clear();
-                                      });
-                                    },
-                                  )
-                                : null,
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
-                          ),
-                        ),
+  Widget _buildWideOrderPanel(BoxConstraints constraints) {
+    final panelWidth = (constraints.maxWidth * 0.38).clamp(280.0, 360.0);
+    return Container(
+      width: panelWidth,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(left: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${_totalItemQuantity()} items',
+                      style: TextStyle(
+                        fontSize: 14.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                        height: 1.1,
                       ),
-                      SizedBox(height: 12.h),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Row(
-                          children: [
-                            _buildCategoryPill('All', 'ALL'),
-                            ..._categories.map((cat) => _buildCategoryPill(cat['_id'], cat['name'])),
-                          ],
-                        ),
+                    ),
+                    Text(
+                      'Order Summary',
+                      style: TextStyle(
+                        fontSize: 11.sp,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey,
+                        height: 1.1,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-
-                Expanded(
-                  child: Container(
-                    color: Colors.grey.shade50,
-                    padding: EdgeInsets.symmetric(horizontal: 16.w).copyWith(bottom: 140.h),
-                    child: _isLoading
-                        ? const Center(child: CircularProgressIndicator(color: Colors.orange))
-                        : filteredItems.isEmpty
-                            ? const Center(
-                                child: Text('No items found', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-                              )
-                            : GridView.builder(
-                                padding: EdgeInsets.only(top: 8.h),
-                                physics: const BouncingScrollPhysics(),
-                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: MediaQuery.of(context).size.width > 600 ? 3 : 2,
-                                  mainAxisSpacing: 10.h,
-                                  crossAxisSpacing: 10.w,
-                                  childAspectRatio: 2.2,
-                                ),
-                                itemCount: filteredItems.length,
-                                itemBuilder: (ctx, idx) {
-                                  final item = filteredItems[idx];
-                                  final qty = _cart[item['_id']]?['quantity'] ?? 0;
-                                  return Container(
-                                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(12.r),
-                                      border: Border.all(
-                                        color: qty > 0 ? Colors.orange.shade400 : Colors.grey.shade100,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              Text(
-                                                (item['name'] ?? '').toString().toUpperCase(),
-                                                style: TextStyle(
-                                                  fontSize: 10.sp,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: Colors.black87,
-                                                ),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                              SizedBox(height: 4.h),
-                                              Text(
-                                                '₹${item['basePrice']}',
-                                                style: TextStyle(
-                                                  fontSize: 13.sp,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: Colors.blueGrey.shade700,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (qty > 0)
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.black87,
-                                              borderRadius: BorderRadius.circular(8.r),
-                                            ),
-                                            padding: EdgeInsets.all(4.r),
-                                            child: Row(
-                                              children: [
-                                                GestureDetector(
-                                                  onTap: () => _updateQuantity(item, -1),
-                                                  child: Icon(LucideIcons.minus, size: 12.sp, color: Colors.white),
-                                                ),
-                                                SizedBox(width: 4.w),
-                                                Text('$qty', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, color: Colors.white)),
-                                                SizedBox(width: 4.w),
-                                                GestureDetector(
-                                                  onTap: () => _updateQuantity(item, 1),
-                                                  child: Icon(LucideIcons.plus, size: 12.sp, color: Colors.white),
-                                                ),
-                                              ],
-                                            ),
-                                          )
-                                        else
-                                          GestureDetector(
-                                            onTap: () => _updateQuantity(item, 1),
-                                            child: Container(
-                                              padding: EdgeInsets.all(6.r),
-                                              decoration: BoxDecoration(
-                                                color: Colors.grey.shade100,
-                                                borderRadius: BorderRadius.circular(8.r),
-                                              ),
-                                              child: Icon(LucideIcons.plus, size: 14.sp, color: Colors.grey.shade500),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'TOTAL',
+                      style: TextStyle(
+                        fontSize: 9.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.grey,
+                        letterSpacing: 1,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      '₹${_totalPrice()}',
+                      style: TextStyle(
+                        fontSize: 20.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-
-            if (showOrderPanel && (_cart.isNotEmpty || _existingItems.isNotEmpty))
-              _buildBottomSheet(),
-
-            if (widget.onCartConfirmed != null && _cart.isNotEmpty)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: EdgeInsets.all(24.r),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(32.r)),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 40)],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          Divider(height: 1, color: Colors.grey.shade100, thickness: 1),
+          Expanded(
+            child: (_cart.isEmpty && _existingItems.isEmpty)
+                ? Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24.r),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text("SELECTED", style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.grey, letterSpacing: 1)),
-                          Text("₹${_newItemsTotal()}", style: TextStyle(fontSize: 24.sp, fontWeight: FontWeight.w900, color: Colors.black)),
+                          Icon(LucideIcons.shoppingBag, size: 40.sp, color: Colors.grey.shade300),
+                          SizedBox(height: 12.h),
+                          Text(
+                            'Your cart is empty',
+                            style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.bold, color: Colors.grey.shade500),
+                          ),
+                          SizedBox(height: 4.h),
+                          Text(
+                            'Tap items on the left to add them to this order',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 11.sp, color: Colors.grey.shade400),
+                          ),
                         ],
                       ),
-                      ElevatedButton(
-                        onPressed: () => _handleSendOrder(shouldPrintKOT: false),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: EdgeInsets.symmetric(horizontal: 40.w, vertical: 16.h),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                        ),
-                        child: Text(_confirmButtonLabel(withPrint: false), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1)),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            if (_showQR && _qrData != null)
-              Container(
-                color: Colors.black87,
-                alignment: Alignment.center,
-                child: Container(
-                  margin: EdgeInsets.all(32.r),
-                  padding: EdgeInsets.all(24.r),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24.r)),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                    ),
+                  )
+                : ListView(
+                    padding: EdgeInsets.zero,
+                    physics: const BouncingScrollPhysics(),
                     children: [
-                      Text("Scan & Pay", style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.bold)),
-                      SizedBox(height: 16.h),
-                      if (_qrData!['qrImageUrl'] != null)
-                        Image.network(_qrData!['qrImageUrl'], height: 200.h, width: 200.w),
-                      SizedBox(height: 12.h),
-                      Text("UPI ID: ${_qrData!['upiId']}", style: TextStyle(fontWeight: FontWeight.bold)),
-                      SizedBox(height: 24.h),
-                      ElevatedButton(
-                        onPressed: _resetAndClose,
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 12.h)),
-                        child: const Text("Done", style: TextStyle(color: Colors.white)),
-                      ),
+                      ..._existingItems.values.map((line) => _buildCartLine(line, true)),
+                      ..._cart.values.map((item) => _buildCartLine(item, false)),
                     ],
                   ),
-                ),
-              ),
+          ),
+          Container(
+            padding: EdgeInsets.all(16.w),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: Colors.grey.shade100)),
+            ),
+            child: widget.onCartConfirmed != null
+                ? SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _cart.isEmpty ? null : () => _handleSendOrder(shouldPrintKOT: false),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 14.h),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                      ),
+                      child: Text(
+                        _confirmButtonLabel(withPrint: false),
+                        style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1),
+                      ),
+                    ),
+                  )
+                : _buildPlaceOrderBtn(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQRModal() {
+    return Container(
+      color: Colors.black87,
+      alignment: Alignment.center,
+      child: Container(
+        margin: EdgeInsets.all(32.r),
+        padding: EdgeInsets.all(24.r),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24.r)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Scan & Pay", style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16.h),
+            if (_qrData!['qrImageUrl'] != null)
+              Image.network(_qrData!['qrImageUrl'], height: 200.h, width: 200.w),
+            SizedBox(height: 12.h),
+            Text("UPI ID: ${_qrData!['upiId']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 24.h),
+            ElevatedButton(
+              onPressed: _resetAndClose,
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 12.h)),
+              child: const Text("Done", style: TextStyle(color: Colors.white)),
+            ),
           ],
         ),
       ),

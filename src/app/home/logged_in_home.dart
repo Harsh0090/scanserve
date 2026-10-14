@@ -35,6 +35,12 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
     return u?['data']?['restaurants']?[0]?['name'] ?? u?['restaurants']?[0]?['name'] ?? 'Restaurant';
   }
 
+  bool get _isFoodTruck {
+    final u = ref.read(authProvider).user;
+    final bt = u?['data']?['restaurants']?[0]?['businessType'] ?? u?['businessType'] ?? '';
+    return bt == 'food_truck';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -286,21 +292,58 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
 
   Widget _buildKpiCards(double netRevenue, double netProfit) {
     final filterLabel = _filter == 'today' ? 'Today' : _filter == 'week' ? 'Last 7 days' : '$_customFrom \u2013 $_customTo';
-    return GridView.count(
-      crossAxisCount: MediaQuery.of(context).size.width > 600 ? 4 : 2,
-      shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 1.4,
-      children: [
-        StatCard(title: 'Total Orders', value: '${_summary?['totalOrders'] ?? '\u2014'}',
-          icon: LucideIcons.package, sub: filterLabel),
-        StatCard(title: 'Gross Revenue', value: '\u20B9${_fmtNum(netRevenue)}',
-          icon: LucideIcons.trendingUp, sub: 'Net of all sales', trend: 'up'),
-        StatCard(title: 'Net Profit', value: '\u20B9${_fmtNum(netProfit.abs())}',
-          icon: LucideIcons.indianRupee, sub: netProfit >= 0 ? 'After expenses' : 'Loss this period',
-          trend: netProfit >= 0 ? 'up' : 'down'),
-        StatCard(title: 'Upsell Revenue', value: '\u20B9${_fmtNum((_summary?['upsellRevenue'] ?? 0).toDouble())}',
-          icon: LucideIcons.sparkles, sub: 'Auto-suggested adds', trend: 'up', primary: true),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount = constraints.maxWidth >= 900 ? 4 : 2;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            mainAxisExtent: 118,
+          ),
+          itemCount: 4,
+          itemBuilder: (context, index) {
+            switch (index) {
+              case 0:
+                return StatCard(
+                  title: 'Total Orders',
+                  value: '${_summary?['totalOrders'] ?? '—'}',
+                  icon: LucideIcons.package,
+                  sub: filterLabel,
+                );
+              case 1:
+                return StatCard(
+                  title: 'Gross Revenue',
+                  value: '₹${_fmtNum(netRevenue)}',
+                  icon: LucideIcons.trendingUp,
+                  sub: 'Net of all sales',
+                  trend: 'up',
+                );
+              case 2:
+                return StatCard(
+                  title: 'Net Profit',
+                  value: '₹${_fmtNum(netProfit.abs())}',
+                  icon: LucideIcons.indianRupee,
+                  sub: netProfit >= 0 ? 'After expenses' : 'Loss this period',
+                  trend: netProfit >= 0 ? 'up' : 'down',
+                );
+              case 3:
+              default:
+                return StatCard(
+                  title: 'Upsell Revenue',
+                  value: '₹${_fmtNum((_summary?['upsellRevenue'] ?? 0).toDouble())}',
+                  icon: LucideIcons.sparkles,
+                  sub: 'Auto-suggested adds',
+                  trend: 'up',
+                  primary: true,
+                );
+            }
+          },
+        );
+      },
     );
   }
 
@@ -323,7 +366,7 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
   }
 
   Widget _sidePanel(double netRevenue, double totalExpense) {
-    if (_summary?['paymentBreakdown'] != null) {
+    if (_isFoodTruck && _summary?['paymentBreakdown'] != null) {
       return PaymentBreakdown(data: _summary!['paymentBreakdown']);
     }
     final avgOrder = (_summary?['totalOrders'] != null && _summary!['totalOrders'] > 0)
@@ -366,3 +409,4 @@ class _LoggedInHomePageState extends ConsumerState<LoggedInHomePage> {
   String _fmtNum(double v) => v.toStringAsFixed(0).replaceAllMapped(
       RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
 }
+

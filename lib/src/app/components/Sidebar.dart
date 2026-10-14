@@ -5,8 +5,14 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../context/AuthContext.dart';
 
+// ─── Breakpoint (must match DashboardLayout) ─────────────────────────────
+const double _kTabletBreakpoint = 768.0;
+
 class Sidebar extends ConsumerStatefulWidget {
-  const Sidebar({super.key});
+  /// [isInline] = true  → rendered as a persistent left-rail on tablets.
+  /// [isInline] = false → rendered inside a Drawer (mobile default).
+  final bool isInline;
+  const Sidebar({super.key, this.isInline = false});
 
   @override
   ConsumerState<Sidebar> createState() => _SidebarState();
@@ -157,6 +163,17 @@ class _SidebarState extends ConsumerState<Sidebar> {
     if (mounted) context.go('/');
   }
 
+  void _navigateTo(String href) {
+    // On mobile (drawer mode) pop the drawer first, then navigate.
+    if (!widget.isInline) {
+      final scaffold = Scaffold.of(context);
+      if (scaffold.isDrawerOpen) {
+        Navigator.of(context).pop();
+      }
+    }
+    context.go(href);
+  }
+
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
@@ -171,10 +188,27 @@ class _SidebarState extends ConsumerState<Sidebar> {
       );
     }
 
-    // Use the raw user object for role/businessType filtering.
-    // authState.user = res['data'] from /api/auth/me, which has role, restaurantId, etc at top level.
     final navItems = _getFilteredItems(authState.user);
     final currentPath = GoRouterState.of(context).uri.toString();
+
+    // ── Adaptive sizing ────────────────────────────────────────────────────
+    // When inline on a tablet we use slightly tighter paddings / font sizes
+    // so the sidebar fits in its 240 dp column without relying on .sp / .w
+    // scaling (which targets the 402-wide phone canvas).
+    final screenWidth = MediaQuery.of(context).size.width;
+    final bool isTablet = screenWidth >= _kTabletBreakpoint;
+
+    final double itemVertPad = isTablet ? 12.0 : 14.h;
+    final double itemHorizPad = isTablet ? 14.0 : 16.w;
+    final double itemFontSize = isTablet ? 13.0 : 14.sp;
+    final double iconSize = isTablet ? 20.0 : 22.sp;
+    final double itemSpacing = isTablet ? 10.0 : 14.w;
+    final double listHorizPad = isTablet ? 12.0 : 16.w;
+    final double listVertPad = isTablet ? 10.0 : 12.h;
+    final double itemRadius = isTablet ? 14.0 : 16.0;
+    final double logoIconSize = isTablet ? 18.0 : 20.sp;
+    final double logoFontSize = isTablet ? 16.0 : 18.sp;
+    final double logoPad = isTablet ? 16.0 : 20.0;
 
     return SafeArea(
       child: Container(
@@ -185,9 +219,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ),
         child: Column(
           children: [
-            // LOGO & CLOSE SECTION
+            // ── LOGO & CLOSE SECTION ───────────────────────────────────
             Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 20.h),
+              padding: EdgeInsets.symmetric(
+                horizontal: logoPad,
+                vertical: logoPad,
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -195,25 +232,28 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     child: GestureDetector(
                       onTap: () {
                         context.go('/');
-                        if (Scaffold.of(context).hasDrawer) {
+                        if (!widget.isInline &&
+                            Scaffold.of(context).hasDrawer) {
                           Navigator.of(context).pop();
                         }
                       },
                       child: Row(
                         children: [
                           Container(
-                            padding: EdgeInsets.all(6.r),
+                            padding: EdgeInsets.all(isTablet ? 6.0 : 6.r),
                             decoration: BoxDecoration(
                               color: const Color(0xFFFF5C00),
-                              borderRadius: BorderRadius.circular(8.r),
+                              borderRadius: BorderRadius.circular(
+                                isTablet ? 8.0 : 8.r,
+                              ),
                             ),
                             child: Icon(
                               LucideIcons.qrCode,
                               color: Colors.white,
-                              size: 20.sp,
+                              size: logoIconSize,
                             ),
                           ),
-                          SizedBox(width: 10.w),
+                          SizedBox(width: isTablet ? 10.0 : 10.w),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -222,7 +262,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                                 Text(
                                   'Scan Serve',
                                   style: TextStyle(
-                                    fontSize: 18.sp,
+                                    fontSize: logoFontSize,
                                     fontWeight: FontWeight.w900,
                                     color: const Color(0xFF0F172A),
                                     height: 1.1,
@@ -232,7 +272,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
                                 Text(
                                   'ADMIN PORTAL',
                                   style: TextStyle(
-                                    fontSize: 9.sp,
+                                    fontSize: isTablet ? 9.0 : 9.sp,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.grey,
                                     letterSpacing: 1,
@@ -246,66 +286,62 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     ),
                   ),
 
-                  // Close Drawer Button
-                  IconButton(
-                    icon: Icon(
-                      LucideIcons.x,
-                      size: 20.sp,
-                      color: const Color(0xFF64748B),
+                  // Show close button only inside a Drawer (mobile)
+                  if (!widget.isInline)
+                    IconButton(
+                      icon: Icon(
+                        LucideIcons.x,
+                        size: isTablet ? 20.0 : 20.sp,
+                        color: const Color(0xFF64748B),
+                      ),
+                      onPressed: () {
+                        if (Scaffold.of(context).hasDrawer) {
+                          Navigator.of(context).pop();
+                        }
+                      },
+                      tooltip: 'Close Menu',
                     ),
-                    onPressed: () {
-                      if (Scaffold.of(context).hasDrawer) {
-                        Navigator.of(context).pop();
-                      }
-                    },
-                    tooltip: 'Close Menu',
-                  ),
                 ],
               ),
             ),
 
             const Divider(height: 1, color: Color(0xFFEFF2F4)),
 
-            // NAVIGATION ITEMS
+            // ── NAVIGATION ITEMS ─────────────────────────────────────────
             Expanded(
               child: ListView.builder(
-                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                padding: EdgeInsets.symmetric(
+                  horizontal: listHorizPad,
+                  vertical: listVertPad,
+                ),
                 itemCount: navItems.length,
                 itemBuilder: (context, index) {
                   final item = navItems[index];
                   final bool isActive = currentPath.startsWith(item['href']);
 
                   return InkWell(
-                    onTap: () {
-                      // Close drawer BEFORE navigating — the Drawer's context is
-                      // outside the ShellRoute subtree, so we must pop it first
-                      // to avoid GoException: no routes for location.
-                      if (Scaffold.of(context).isDrawerOpen) {
-                        Navigator.of(context).pop();
-                      }
-                      context.go(item['href']);
-                    },
-                    borderRadius: BorderRadius.circular(16.r),
+                    onTap: () => _navigateTo(item['href']),
+                    borderRadius: BorderRadius.circular(itemRadius),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
-                      margin: EdgeInsets.only(bottom: 8.h),
+                      margin: EdgeInsets.only(
+                        bottom: isTablet ? 6.0 : 8.h,
+                      ),
                       padding: EdgeInsets.symmetric(
-                        vertical: 14.h,
-                        horizontal: 16.w,
+                        vertical: itemVertPad,
+                        horizontal: itemHorizPad,
                       ),
                       decoration: BoxDecoration(
                         color: isActive
                             ? const Color(0xFFFF5C00)
                             : Colors.transparent,
-                        borderRadius: BorderRadius.circular(16.r),
+                        borderRadius: BorderRadius.circular(itemRadius),
                         boxShadow: isActive
                             ? [
                                 BoxShadow(
-                                  color: const Color(
-                                    0xFFFF5C00,
-                                  ).withAlpha(100),
-                                  blurRadius: 10.r,
-                                  offset: Offset(0, 4.h),
+                                  color: const Color(0xFFFF5C00).withAlpha(100),
+                                  blurRadius: isTablet ? 8.0 : 10.r,
+                                  offset: Offset(0, isTablet ? 3.0 : 4.h),
                                 ),
                               ]
                             : [],
@@ -314,17 +350,17 @@ class _SidebarState extends ConsumerState<Sidebar> {
                         children: [
                           Icon(
                             item['icon'],
-                            size: 22.sp,
+                            size: iconSize,
                             color: isActive
                                 ? Colors.white
                                 : const Color(0xFF475569),
                           ),
-                          SizedBox(width: 14.w),
+                          SizedBox(width: itemSpacing),
                           Expanded(
                             child: Text(
                               item['name'],
                               style: TextStyle(
-                                fontSize: 14.sp,
+                                fontSize: itemFontSize,
                                 fontWeight: FontWeight.bold,
                                 color: isActive
                                     ? Colors.white
@@ -341,15 +377,15 @@ class _SidebarState extends ConsumerState<Sidebar> {
               ),
             ),
 
-            // FOOTER LOGOUT
+            // ── FOOTER LOGOUT ─────────────────────────────────────────────
             Container(
-              padding: EdgeInsets.all(20.r),
+              padding: EdgeInsets.all(isTablet ? 16.0 : 20.r),
               decoration: const BoxDecoration(
                 border: Border(top: BorderSide(color: Color(0xFFEFF2F4))),
               ),
               child: InkWell(
                 onTap: () {
-                  if (Scaffold.of(context).hasDrawer) {
+                  if (!widget.isInline && Scaffold.of(context).hasDrawer) {
                     Navigator.of(context).pop();
                   }
                   _handleLogout();
@@ -358,14 +394,14 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   children: [
                     Icon(
                       LucideIcons.logOut,
-                      size: 22.sp,
+                      size: iconSize,
                       color: Colors.grey,
                     ),
-                    SizedBox(width: 14.w),
+                    SizedBox(width: itemSpacing),
                     Text(
                       'Sign Out',
                       style: TextStyle(
-                        fontSize: 14.sp,
+                        fontSize: itemFontSize,
                         fontWeight: FontWeight.bold,
                         color: Colors.grey,
                       ),
@@ -380,4 +416,3 @@ class _SidebarState extends ConsumerState<Sidebar> {
     );
   }
 }
-

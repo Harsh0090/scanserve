@@ -524,7 +524,7 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
                           SizedBox(height: 24.h),
                           LayoutBuilder(
                             builder: (ctx, constraints) {
-                              final isMobile = constraints.maxWidth < 600.w;
+                              final isMobile = constraints.maxWidth < 600;
                               return Flex(
                                 direction: isMobile
                                     ? Axis.vertical
@@ -848,7 +848,7 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
                   else
                     LayoutBuilder(
                       builder: (ctx, constraints) {
-                        final isMobile = constraints.maxWidth < 600.w;
+                        final isMobile = constraints.maxWidth < 600;
                         final cardWidth = isMobile
                             ? constraints.maxWidth
                             : (constraints.maxWidth - 16.w) / 2;
@@ -1150,3 +1150,4 @@ class _UpsellPageState extends ConsumerState<UpsellPage> {
     );
   }
 }
+

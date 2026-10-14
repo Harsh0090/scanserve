@@ -79,7 +79,7 @@ class _TableGeneratorPageState extends ConsumerState<TableGeneratorPage> {
         padding: EdgeInsets.all(24.r),
         child: Center(
           child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: 1100.w),
+            constraints: const BoxConstraints(maxWidth: 1100),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -162,7 +162,7 @@ class _TableGeneratorPageState extends ConsumerState<TableGeneratorPage> {
                     children: [
                       LayoutBuilder(
                         builder: (ctx, constraints) {
-                          final isMobile = constraints.maxWidth < 600.w;
+                          final isMobile = constraints.maxWidth < 600;
                           return Flex(
                             direction: isMobile
                                 ? Axis.vertical

@@ -105,7 +105,7 @@ class _PaymentSetupPageState extends State<PaymentSetupPage> {
         padding: EdgeInsets.symmetric(vertical: 40.h, horizontal: 20.w),
         child: Center(
           child: Container(
-            constraints: BoxConstraints(maxWidth: 500.w),
+            constraints: const BoxConstraints(maxWidth: 520),
             padding: EdgeInsets.all(32.r),
             decoration: BoxDecoration(
               color: Colors.white,

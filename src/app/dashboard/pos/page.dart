@@ -87,7 +87,7 @@ class _PosPageState extends ConsumerState<PosPage> {
         child: SingleChildScrollView(
           padding: EdgeInsets.all(32.r),
           child: Container(
-            constraints: BoxConstraints(maxWidth: 400.w),
+            constraints: const BoxConstraints(maxWidth: 480),
             padding: EdgeInsets.all(32.r),
             decoration: BoxDecoration(
               color: Colors.white,
@@ -239,3 +239,4 @@ class _PosPageState extends ConsumerState<PosPage> {
     );
   }
 }
+

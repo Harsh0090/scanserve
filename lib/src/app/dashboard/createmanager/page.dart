@@ -209,7 +209,7 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
                 ),
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    final isDesktop = MediaQuery.of(context).size.width > 900.w;
+                    final isDesktop = MediaQuery.of(context).size.width >= 768;
                     return Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -284,7 +284,7 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
                 // Left Pane: Registration Form (Desktop)
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    if (MediaQuery.of(context).size.width <= 900.w) {
+                    if (MediaQuery.of(context).size.width < 768) {
                       return const SizedBox.shrink();
                     }
                     return _buildFormPane();
@@ -511,8 +511,8 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
-      width: MediaQuery.of(context).size.width > 400.w
-          ? 400.w
+      width: MediaQuery.of(context).size.width > 450
+          ? 420.0
           : MediaQuery.of(context).size.width * 0.9,
       child: SafeArea(child: _buildFormPane(isDrawer: true)),
     );

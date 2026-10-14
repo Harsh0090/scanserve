@@ -115,6 +115,16 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
     final authState = ref.watch(authProvider);
     final user = authState.user;
     final gstEnabled = user?['gstEnabled'] == true;
+    final isFoodTruck =
+        user?['businessType'] == 'FOOD_TRUCK' ||
+        user?['type'] == 'foodtruck' ||
+        user?['data']?['businessType'] == 'FOOD_TRUCK' ||
+        user?['data']?['type'] == 'foodtruck';
+    final isRestaurant =
+        user?['businessType'] == 'RESTAURANT' ||
+        user?['type'] == 'restaurant' ||
+        user?['data']?['businessType'] == 'RESTAURANT' ||
+        user?['data']?['type'] == 'restaurant';
 
     // Reactive: If user just loaded, initialize data
     if (user != null && _branches.isEmpty && _loadingBranches) {
@@ -142,7 +152,7 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
             // Header
             LayoutBuilder(
               builder: (ctx, constraints) {
-                final isMobile = constraints.maxWidth < 700.w;
+                final isMobile = constraints.maxWidth < 700;
                 return Flex(
                   direction: isMobile ? Axis.vertical : Axis.horizontal,
                   crossAxisAlignment: isMobile
@@ -375,55 +385,59 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
               // Stat Cards
               LayoutBuilder(
                 builder: (ctx, constraints) {
-                  final crossAxisCount = constraints.maxWidth < 600.w
+                  final crossAxisCount = constraints.maxWidth < 550
                       ? 1
-                      : constraints.maxWidth < 1000.w
+                      : constraints.maxWidth < 950
                       ? 2
                       : 4;
-                  return GridView.count(
-                    crossAxisCount: crossAxisCount,
+                  final statCards = [
+                    _buildStatCard(
+                      'Total Orders',
+                      '${(_summary?['totalOrders'] ?? 0)}',
+                      LucideIcons.package,
+                      false,
+                    ),
+                    _buildStatCard(
+                      'Net Revenue',
+                      '₹${num.parse(_summary?['netRevenue']?.toString() ?? '0').toStringAsFixed(0)}',
+                      LucideIcons.trendingUp,
+                      false,
+                    ),
+                    if (gstEnabled)
+                      _buildStatCard(
+                        'GST Collected',
+                        '₹${num.parse(_summary?['gstCollected']?.toString() ?? '0').toStringAsFixed(2)}',
+                        LucideIcons.indianRupee,
+                        false,
+                      ),
+                    _buildStatCard(
+                      'Upsell Revenue',
+                      '₹${num.parse(_summary?['upsellRevenue']?.toString() ?? '0').toStringAsFixed(0)}',
+                      LucideIcons.sparkles,
+                      true,
+                    ),
+                  ];
+                  return GridView.builder(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      mainAxisSpacing: 16.r,
+                      crossAxisSpacing: 16.r,
+                      mainAxisExtent: 105,
+                    ),
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 16.r,
-                    crossAxisSpacing: 16.r,
-                    childAspectRatio: 2.5,
-                    children: [
-                      _buildStatCard(
-                        'Total Orders',
-                        '${(_summary?['totalOrders'] ?? 0)}',
-                        LucideIcons.package,
-                        false,
-                      ),
-                      _buildStatCard(
-                        'Net Revenue',
-                        '₹${num.parse(_summary?['netRevenue']?.toString() ?? '0').toStringAsFixed(0)}',
-                        LucideIcons.trendingUp,
-                        false,
-                      ),
-                      if (gstEnabled)
-                        _buildStatCard(
-                          'GST Collected',
-                          '₹${num.parse(_summary?['gstCollected']?.toString() ?? '0').toStringAsFixed(2)}',
-                          LucideIcons.indianRupee,
-                          false,
-                        ),
-                      _buildStatCard(
-                        'Upsell Revenue',
-                        '₹${num.parse(_summary?['upsellRevenue']?.toString() ?? '0').toStringAsFixed(0)}',
-                        LucideIcons.sparkles,
-                        true,
-                      ),
-                    ],
+                    itemCount: statCards.length,
+                    itemBuilder: (ctx, idx) => statCards[idx],
                   );
                 },
               ),
-              if (_summary?['paymentBreakdown'] != null) ...[
+              if (isFoodTruck || isRestaurant) ...[
                 SizedBox(height: 24.h),
                 LayoutBuilder(
                   builder: (ctx, constraints) {
                     return ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxWidth: min(400.w, constraints.maxWidth),
+                        maxWidth: min(450.0, constraints.maxWidth),
                       ),
                       child: _buildPaymentBreakdown(
                         _summary?['paymentBreakdown'],
@@ -859,3 +873,4 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
     );
   }
 }
+

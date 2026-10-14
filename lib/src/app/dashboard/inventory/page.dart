@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -141,7 +142,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     int lowStockCount = _items.where((i) => (i['currentStock'] ?? 0) <= (i['lowStockThreshold'] ?? 0)).length;
     double totalValue = _items.fold(0, (sum, i) => sum + ((i['currentStock'] ?? 0) * (i['costPerUnit'] ?? 0)));
 
-    final isMobile = MediaQuery.of(context).size.width < 600.w;
+    final isMobile = MediaQuery.of(context).size.width < 768;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -292,7 +293,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                 physics: const NeverScrollableScrollPhysics(),
                 gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: 400.w,
-                  mainAxisExtent: 380.h,
+                  mainAxisExtent: math.max(340.0, 380.h),
                   crossAxisSpacing: 16.w,
                   mainAxisSpacing: 16.h,
                 ),

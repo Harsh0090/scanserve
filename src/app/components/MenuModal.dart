@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../context/AuthContext.dart';
 import '../../utils/apiClient.dart';
+import '../../services/kot_print_service.dart';
 
 class MenuModal extends ConsumerStatefulWidget {
   final Map<String, dynamic>? table;
@@ -45,8 +47,6 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _nameEnabled = false;
   String _customerName = "";
   String _customerPhone = "";
-  String? _paymentMode;
-  String? _paymentMethod;
 
   bool _postOrderModal = false;
   Map<String, dynamic>? _createdOrderRef;
@@ -57,6 +57,13 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _mobileSheetExpanded = false;
 
   bool get _isExistingOrder => widget.sendAppendOrder != null && widget.sendAppendOrder!['currentOrderId'] != null;
+
+  /// Mirrors JS: canPrintKOT = user.autoPrintKOT || user.liveOrderKOT
+  bool get _canPrintKOT {
+    final user = ref.read(authProvider).user;
+    final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
+    return userData['autoPrintKOT'] == true || userData['liveOrderKOT'] == true;
+  }
 
   @override
   void initState() {
@@ -239,7 +246,10 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     return total;
   }
 
-  Future<void> _handleSendOrder() async {
+  /// Mirrors JS handleSendOrder(shouldPrintKOT).
+  /// shouldPrintKOT=true  → place/save order AND print KOT
+  /// shouldPrintKOT=false → place/save order silently (no KOT)
+  Future<void> _handleSendOrder({bool shouldPrintKOT = true}) async {
     if (_isSubmitting) return;
 
     if (widget.onCartConfirmed != null) {
@@ -254,6 +264,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     setState(() => _isSubmitting = true);
 
     try {
+      // ─── EXISTING ORDER (append / update) ───────────────────────────────
       if (_isExistingOrder) {
         if (!_hasAnyChanges()) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No changes to save")));
@@ -263,54 +274,119 @@ class _MenuModalState extends ConsumerState<MenuModal> {
 
         final orderId = widget.sendAppendOrder!['currentOrderId'] as String;
 
-        List<String> removedIds = [];
-        for (var id in _originalQuantities.keys) {
-          if (!_existingItems.containsKey(id)) removedIds.add(id);
-        }
+        // Identify removed lines
+        final removedIds = _originalQuantities.keys
+            .where((id) => !_existingItems.containsKey(id))
+            .toList();
 
-        List<Map<String, dynamic>> reducedLines = [];
-        for (var line in _existingItems.values) {
-          final id = line['_id'];
-          final orig = _originalQuantities[id];
-          if (orig != null && line['quantity'] < orig && line['quantity'] > 0) {
-            reducedLines.add(line);
-          }
-        }
+        // Lines whose quantity was REDUCED (not zeroed)
+        final reducedLines = _existingItems.values.where((line) {
+          final orig = _originalQuantities[line['_id']];
+          return orig != null && line['quantity'] < orig && line['quantity'] > 0;
+        }).toList();
 
-        List<Map<String, dynamic>> newCartItems = _cart.values.map((i) => {
+        // Lines whose quantity was INCREASED → these go on the KOT
+        final increasedLines = _existingItems.values.where((line) {
+          final orig = _originalQuantities[line['_id']];
+          return orig != null && line['quantity'] > orig;
+        }).toList();
+
+        // New cart items being appended
+        final newCartItems = _cart.values.map((i) => {
           'itemId': i['_id'],
           'quantity': i['quantity'],
           'isUpsell': false,
         }).toList();
 
-        for (var line in reducedLines) {
+        // Build KOT items: only the delta (increased units)
+        final updatedKOTItems = <Map<String, dynamic>>[];
+        for (final line in increasedLines) {
+          final originalQty = _originalQuantities[line['_id']] ?? 0;
+          final delta = (line['quantity'] as int) - originalQty;
+          if (delta > 0) {
+            updatedKOTItems.add({
+              'item': {'branchName': line['name']},
+              'quantity': delta,
+              'skipKitchen': false,
+            });
+          }
+        }
+
+        // Apply quantity reductions
+        for (final line in reducedLines) {
           await apiFetch('/api/orders/$orderId/update-item', method: 'PATCH', data: {
             'lineId': line['_id'],
             'quantity': line['quantity'],
+            'skipAutoPrint': !shouldPrintKOT,
           });
         }
 
+        // Append brand-new items from cart
+        dynamic updatedOrder;
         if (newCartItems.isNotEmpty) {
-          await apiFetch('/api/orders/append-items', method: 'PUT', data: {
+          updatedOrder = await apiFetch('/api/orders/append-items', method: 'PUT', data: {
             'orderId': orderId,
             'items': newCartItems,
+            'skipAutoPrint': !shouldPrintKOT,
           });
         }
 
-        for (var lineId in removedIds) {
+        // Remove fully-deleted lines
+        for (final lineId in removedIds) {
           await apiFetch('/api/admin/orders/$orderId/remove-item', method: 'PATCH', data: {
             'itemId': lineId,
           });
         }
 
+        // ── KOT for quantity-increased existing items ──
+        if (shouldPrintKOT && updatedKOTItems.isNotEmpty) {
+          try {
+            final kotService = ref.read(kotPrintServiceProvider);
+            await kotService.printKOT(
+              orderId: orderId,
+              items: updatedKOTItems,
+              isAddOn: true,
+              tableNumber: widget.table?['tableName']?.toString(),
+              restaurantName: ref.read(authProvider).user?['organizationName']?.toString(),
+            );
+          } catch (e) {
+            debugPrint('⚠️ KOT print error (increased items): $e');
+          }
+        }
+
+        // ── KOT for newly appended cart items ──
+        if (shouldPrintKOT && updatedOrder != null && _cart.isNotEmpty) {
+          try {
+            final newOrderItems = _cart.values.map((i) => {
+              'item': {'branchName': i['name'] ?? ''},
+              'name': i['name'] ?? '',
+              'quantity': i['quantity'],
+              'skipKitchen': false,
+            }).toList();
+            final kotService = ref.read(kotPrintServiceProvider);
+            await kotService.printKOT(
+              orderId: orderId,
+              items: newOrderItems,
+              isAddOn: true,
+              tableNumber: widget.table?['tableName']?.toString(),
+              restaurantName: ref.read(authProvider).user?['organizationName']?.toString(),
+            );
+          } catch (e) {
+            debugPrint('⚠️ KOT print error (appended items): $e');
+          }
+        }
+
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Order updated successfully!'), backgroundColor: Colors.green));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Order updated successfully!'), backgroundColor: Colors.green),
+          );
           setState(() => _cart = {});
           Future.delayed(const Duration(milliseconds: 300), widget.onClose);
         }
         return;
       }
 
+      // ─── NEW ORDER ──────────────────────────────────────────────────────
       if (_cart.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Your cart is empty")));
         setState(() => _isSubmitting = false);
@@ -324,30 +400,35 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           'isUpsell': false,
         }).toList(),
         'placedBy': 'STAFF',
+        'skipAutoPrint': !shouldPrintKOT,
       };
 
       if (_mode == 'quick') {
         payload['paymentMode'] = 'POSTPAID';
         payload['customerPhone'] = null;
-        payload['customerName'] = 'Guest';
-      } else if (_mode == 'restaurant') {
+      }
+      if (_mode == 'restaurant') {
+        payload['tableId'] = widget.table?['_id'];
         payload['tableNumber'] = widget.table?['tableName'] ?? 'NA';
         payload['customerPhone'] = 'NA';
         payload['paymentMode'] = 'POSTPAID';
         if (_nameEnabled) {
           payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
         }
-      } else if (_mode == 'foodtruck') {
-        payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
-        payload['customerPhone'] = _customerPhone.trim().isEmpty ? null : _customerPhone.trim();
-        payload['paymentMode'] = _paymentMode;
-        if (_paymentMode == 'PREPAID') {
-          payload['paymentMethod'] = _paymentMethod;
+      }
+      if (_mode == 'quick' || _mode == 'foodtruck') {
+        payload['paymentMode'] = 'POSTPAID';
+        if (_nameEnabled) {
+          payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
+          payload['customerPhone'] = _customerPhone.trim().isEmpty ? null : _customerPhone.trim();
+        } else {
+          payload['customerName'] = 'Guest';
+          payload['customerPhone'] = null;
         }
       }
 
       final res = await apiFetch('/api/orders', method: 'POST', data: payload);
-      
+
       dynamic createdOrder;
       if (res is Map) {
         createdOrder = res['data'] ?? res['order'] ?? res;
@@ -357,24 +438,48 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         createdOrder = res;
       }
 
+      // ── KOT for new order ──
+      if (shouldPrintKOT && createdOrder != null) {
+        final orderId = (createdOrder['_id'] ?? '').toString();
+        // Register this orderId as locally-printed BEFORE the print call so
+        // the socket handler (liveOrderKOT / autoPrintKOT) skips it and
+        // doesn't fire a second KOT for the same order.
+        if (orderId.isNotEmpty) {
+          ref.read(locallyPrintedOrderIds.notifier).add(orderId);
+          // Auto-remove after 30 s to avoid unbounded memory growth
+          Future.delayed(const Duration(seconds: 30), () {
+            if (mounted) {
+              ref.read(locallyPrintedOrderIds.notifier).remove(orderId);
+            }
+          });
+        }
+        try {
+          final items = (createdOrder['items'] as List<dynamic>?) ?? _cart.values.toList();
+          final kotService = ref.read(kotPrintServiceProvider);
+          await kotService.printKOT(
+            orderId: orderId,
+            items: items,
+            isAddOn: false,
+            tableNumber: widget.table?['tableName']?.toString() ??
+                createdOrder['tableNumber']?.toString(),
+            customerName: createdOrder['customerName']?.toString(),
+            restaurantName: ref.read(authProvider).user?['organizationName']?.toString(),
+          );
+        } catch (e) {
+          debugPrint('⚠️ KOT print error (new order): $e');
+        }
+      }
+
       if (mounted) {
         if (widget.onOrderPlaced != null) widget.onOrderPlaced!(createdOrder);
 
-        if (_mode == 'foodtruck' && _paymentMode == 'PREPAID' && _paymentMethod == 'UPI') {
-          try {
-            final qrRes = await apiFetch('/api/restaurants/payment');
-            if (qrRes['payment'] != null && qrRes['payment']['qrImageUrl'] != null) {
-              setState(() {
-                _qrData = qrRes['payment'];
-                _showQR = true;
-                _cart = {};
-                _isSubmitting = false;
-              });
-              return;
-            }
-          } catch (qrErr) {
-            debugPrint("Failed to fetch QR code settings: $qrErr");
-          }
+        if (_mode == 'foodtruck') {
+          setState(() {
+            _createdOrderRef = createdOrder;
+            _postOrderModal = true;
+            _isSubmitting = false;
+          });
+          return;
         }
 
         setState(() => _cart = {});
@@ -382,7 +487,9 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Order failed: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Order failed: $e'), backgroundColor: Colors.red),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -435,21 +542,19 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     }
   }
 
-  String _confirmButtonLabel() {
+  /// withPrint=true → "Place Order + KOT", withPrint=false → "Save Order" / "Place Order"
+  String _confirmButtonLabel({bool withPrint = false}) {
     if (_isSubmitting) {
       return _isExistingOrder ? "SAVING..." : "PLACING...";
     }
     if (widget.onCartConfirmed != null) return "✅ DONE — ADD TO ORDER";
-    return "PLACE ORDER";
+    if (withPrint) return _isExistingOrder ? "SAVE + PRINT KOT" : "PLACE ORDER + KOT";
+    return _isExistingOrder ? "SAVE ORDER" : "PLACE ORDER";
   }
 
   bool _isSubmitDisabled() {
     if (_isSubmitting) return true;
     if (_isExistingOrder) return !_hasAnyChanges();
-    if (_mode == 'foodtruck' && widget.sendAppendOrder == null && widget.onCartConfirmed == null) {
-      if (_paymentMode == null) return true;
-      if (_paymentMode == 'PREPAID' && _paymentMethod == null) return true;
-    }
     return _cart.isEmpty;
   }
 
@@ -473,445 +578,576 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         width: double.infinity,
         height: double.infinity,
         color: Colors.white,
-        child: Stack(
-          children: [
-            Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= 800;
+
+            return Stack(
               children: [
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          GestureDetector(
-                            onTap: widget.onClose,
-                            child: Container(
-                              padding: EdgeInsets.all(8.r),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade100,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(LucideIcons.arrowLeft, size: 18.sp),
+                Column(
+                  children: [
+                    _buildHeader(),
+                    if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                      _buildCustomerDetailsInputs(),
+                    Expanded(
+                      child: isWide
+                          ? Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    children: [
+                                      _buildSearchAndCategories(),
+                                      Expanded(
+                                        child: _buildItemsGrid(
+                                          filteredItems,
+                                          isWide: true,
+                                          constraints: constraints,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                _buildWideOrderPanel(constraints),
+                              ],
+                            )
+                          : Column(
+                              children: [
+                                _buildSearchAndCategories(),
+                                Expanded(
+                                  child: _buildItemsGrid(
+                                    filteredItems,
+                                    isWide: false,
+                                    constraints: constraints,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                          SizedBox(width: 12.w),
+                    ),
+                  ],
+                ),
+
+                if (!isWide && showOrderPanel && (_cart.isNotEmpty || _existingItems.isNotEmpty))
+                  _buildBottomSheet(),
+
+                if (!isWide && widget.onCartConfirmed != null && _cart.isNotEmpty)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: EdgeInsets.all(24.r),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(32.r)),
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 40)],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                widget.onCartConfirmed != null
-                                    ? "ADD ITEMS TO VOICE ORDER"
-                                    : _isExistingOrder
-                                        ? "TABLE ${widget.table?['tableName'] ?? widget.sendAppendOrder?['customerName'] ?? ""}"
-                                        : _mode == "restaurant"
-                                            ? "TABLE ${widget.table?['tableName'] ?? ""}"
-                                            : "QUICK ORDER",
-                                style: TextStyle(
-                                  fontSize: 16.sp,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.black,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                              if (widget.onCartConfirmed != null)
-                                Text(
-                                  "SELECT ITEMS → TAP DONE TO ADD",
-                                  style: TextStyle(
-                                    fontSize: 8.sp,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.orange,
-                                    letterSpacing: 1,
-                                  ),
-                                ),
-                              if (_isExistingOrder && widget.onCartConfirmed == null)
-                                Text(
-                                  "ORDER #${widget.sendAppendOrder!['currentOrderId']?.toString().substring(widget.sendAppendOrder!['currentOrderId'].toString().length - 4).toUpperCase()} — EDITING",
-                                  style: TextStyle(
-                                    fontSize: 8.sp,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.deepOrange,
-                                    letterSpacing: 1,
-                                  ),
-                                ),
+                              Text("SELECTED", style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.grey, letterSpacing: 1)),
+                              Text("₹${_newItemsTotal()}", style: TextStyle(fontSize: 24.sp, fontWeight: FontWeight.w900, color: Colors.black)),
                             ],
                           ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          if (widget.sendAppendOrder == null && widget.onCartConfirmed == null)
-                            GestureDetector(
-                              onTap: () async {
-                                final next = !_nameEnabled;
-                                setState(() {
-                                  _nameEnabled = next;
-                                  if (!next) {
-                                    _customerName = "";
-                                    _customerPhone = "";
-                                  }
-                                });
-                                final prefs = await SharedPreferences.getInstance();
-                                await prefs.setBool('customerDetailsEnabled', next);
-                              },
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                                decoration: BoxDecoration(
-                                  color: _nameEnabled ? Colors.orange.shade50 : Colors.grey.shade50,
-                                  border: Border.all(color: _nameEnabled ? Colors.orange.shade200 : Colors.grey.shade200),
-                                  borderRadius: BorderRadius.circular(12.r),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(LucideIcons.user, size: 13.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
-                                    SizedBox(width: 6.w),
-                                    Icon(_nameEnabled ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
-                                  ],
-                                ),
-                              ),
+                          ElevatedButton(
+                            onPressed: () => _handleSendOrder(shouldPrintKOT: false),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(horizontal: 40.w, vertical: 16.h),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
                             ),
-                          SizedBox(width: 8.w),
-                          GestureDetector(
-                            onTap: widget.onClose,
-                            child: Padding(
-                              padding: EdgeInsets.all(8.r),
-                              child: Icon(LucideIcons.x, size: 24.sp, color: Colors.grey),
-                            ),
+                            child: Text(_confirmButtonLabel(withPrint: false), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1)),
                           ),
                         ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
 
-                if (_mode == 'foodtruck' && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFB),
-                      border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+                if (_showQR && _qrData != null)
+                  _buildQRModal(),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              GestureDetector(
+                onTap: widget.onClose,
+                child: Container(
+                  padding: EdgeInsets.all(8.r),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(LucideIcons.arrowLeft, size: 18.sp),
+                ),
+              ),
+              SizedBox(width: 12.w),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.onCartConfirmed != null
+                        ? "ADD ITEMS TO VOICE ORDER"
+                        : _isExistingOrder
+                            ? "TABLE ${widget.table?['tableName'] ?? widget.sendAppendOrder?['customerName'] ?? ""}"
+                            : _mode == "restaurant"
+                                ? "TABLE ${widget.table?['tableName'] ?? ""}"
+                                : "QUICK ORDER",
+                    style: TextStyle(
+                      fontSize: 16.sp,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
+                      letterSpacing: -0.5,
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildInput('Customer Name', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
-                            ),
-                            SizedBox(width: 12.w),
-                            Expanded(
-                              child: _buildInput('Customer Phone', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 12.h),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildPaymentModeButton(
-                                label: 'PAID',
-                                isSelected: _paymentMode == 'PREPAID',
-                                selectedColor: Colors.green.shade600,
-                                onPressed: () => setState(() {
-                                  _paymentMode = 'PREPAID';
-                                  _paymentMethod = null;
-                                }),
-                              ),
-                            ),
-                            SizedBox(width: 12.w),
-                            Expanded(
-                              child: _buildPaymentModeButton(
-                                label: 'PAY LATER',
-                                isSelected: _paymentMode == 'POSTPAID',
-                                selectedColor: Colors.orange.shade600,
-                                onPressed: () => setState(() {
-                                  _paymentMode = 'POSTPAID';
-                                  _paymentMethod = null;
-                                }),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (_paymentMode == 'PREPAID') ...[
-                          SizedBox(height: 12.h),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _buildPaymentMethodButton(
-                                  label: 'CASH',
-                                  isSelected: _paymentMethod == 'CASH',
-                                  onPressed: () => setState(() => _paymentMethod = 'CASH'),
-                                ),
-                              ),
-                              SizedBox(width: 8.w),
-                              Expanded(
-                                child: _buildPaymentMethodButton(
-                                  label: 'UPI',
-                                  isSelected: _paymentMethod == 'UPI',
-                                  onPressed: () => setState(() => _paymentMethod = 'UPI'),
-                                ),
-                              ),
-                              SizedBox(width: 8.w),
-                              Expanded(
-                                child: _buildPaymentMethodButton(
-                                  label: 'CARD',
-                                  isSelected: _paymentMethod == 'CARD',
-                                  onPressed: () => setState(() => _paymentMethod = 'CARD'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
+                  ),
+                  if (widget.onCartConfirmed != null)
+                    Text(
+                      "SELECT ITEMS → TAP DONE TO ADD",
+                      style: TextStyle(
+                        fontSize: 8.sp,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange,
+                        letterSpacing: 1,
+                      ),
                     ),
-                  )
-                else if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                  if (_isExistingOrder && widget.onCartConfirmed == null)
+                    Text(
+                      "ORDER #${widget.sendAppendOrder!['currentOrderId']?.toString().substring(widget.sendAppendOrder!['currentOrderId'].toString().length - 4).toUpperCase()} — EDITING",
+                      style: TextStyle(
+                        fontSize: 8.sp,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepOrange,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              if (widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                GestureDetector(
+                  onTap: () async {
+                    final next = !_nameEnabled;
+                    setState(() {
+                      _nameEnabled = next;
+                      if (!next) {
+                        _customerName = "";
+                        _customerPhone = "";
+                      }
+                    });
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('customerDetailsEnabled', next);
+                  },
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
                     decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+                      color: _nameEnabled ? Colors.orange.shade50 : Colors.grey.shade50,
+                      border: Border.all(color: _nameEnabled ? Colors.orange.shade200 : Colors.grey.shade200),
+                      borderRadius: BorderRadius.circular(12.r),
                     ),
                     child: Row(
                       children: [
-                        Expanded(
-                          child: _buildInput('Customer Name (optional)', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
-                        ),
-                        SizedBox(width: 12.w),
-                        Expanded(
-                          child: _buildInput('Phone (optional)', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
-                        ),
+                        Icon(LucideIcons.user, size: 13.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
+                        SizedBox(width: 6.w),
+                        Icon(_nameEnabled ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
                       ],
                     ),
                   ),
-
-                Container(
-                  color: Colors.white,
-                  padding: EdgeInsets.all(16.w),
-                  child: Column(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(12.r),
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          onChanged: (val) => setState(() => _searchQuery = val),
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.bold),
-                          decoration: InputDecoration(
-                            hintText: "Search items...",
-                            hintStyle: TextStyle(color: Colors.grey.shade400),
-                            prefixIcon: Icon(LucideIcons.search, size: 16.sp, color: Colors.grey.shade400),
-                            suffixIcon: _searchQuery.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(LucideIcons.x, size: 16.sp, color: Colors.grey.shade400),
-                                    onPressed: () {
-                                      setState(() {
-                                        _searchQuery = "";
-                                        _searchController.clear();
-                                      });
-                                    },
-                                  )
-                                : null,
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
-                          ),
-                        ),
-                      ),
-                      SizedBox(height: 12.h),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Row(
-                          children: [
-                            _buildCategoryPill('All', 'ALL'),
-                            ..._categories.map((cat) => _buildCategoryPill(cat['_id'], cat['name'])),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
+              SizedBox(width: 8.w),
+              GestureDetector(
+                onTap: widget.onClose,
+                child: Padding(
+                  padding: EdgeInsets.all(8.r),
+                  child: Icon(LucideIcons.x, size: 24.sp, color: Colors.grey),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
-                Expanded(
-                  child: Container(
-                    color: Colors.grey.shade50,
-                    padding: EdgeInsets.symmetric(horizontal: 16.w).copyWith(bottom: 140.h),
-                    child: _isLoading
-                        ? const Center(child: CircularProgressIndicator(color: Colors.orange))
-                        : filteredItems.isEmpty
-                            ? const Center(
-                                child: Text('No items found', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-                              )
-                            : GridView.builder(
-                                padding: EdgeInsets.only(top: 8.h),
-                                physics: const BouncingScrollPhysics(),
-                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: MediaQuery.of(context).size.width > 600 ? 3 : 2,
-                                  mainAxisSpacing: 10.h,
-                                  crossAxisSpacing: 10.w,
-                                  childAspectRatio: 2.2,
+  Widget _buildCustomerDetailsInputs() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildInput('Customer Name (optional)', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
+          ),
+          SizedBox(width: 12.w),
+          Expanded(
+            child: _buildInput('Phone (optional)', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchAndCategories() {
+    return Container(
+      color: Colors.white,
+      padding: EdgeInsets.all(16.w),
+      child: Column(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12.r),
+            ),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (val) => setState(() => _searchQuery = val),
+              style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                hintText: "Search items...",
+                hintStyle: TextStyle(color: Colors.grey.shade400),
+                prefixIcon: Icon(LucideIcons.search, size: 16.sp, color: Colors.grey.shade400),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(LucideIcons.x, size: 16.sp, color: Colors.grey.shade400),
+                        onPressed: () {
+                          setState(() {
+                            _searchQuery = "";
+                            _searchController.clear();
+                          });
+                        },
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
+              ),
+            ),
+          ),
+          SizedBox(height: 12.h),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: [
+                _buildCategoryPill('All', 'ALL'),
+                ..._categories.map((cat) => _buildCategoryPill(cat['_id'], cat['name'])),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemsGrid(
+    List<dynamic> filteredItems, {
+    required bool isWide,
+    required BoxConstraints constraints,
+  }) {
+    return Container(
+      color: Colors.grey.shade50,
+      padding: EdgeInsets.symmetric(horizontal: 16.w).copyWith(
+        bottom: isWide ? 24.h : 140.h,
+      ),
+      child: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+          : filteredItems.isEmpty
+              ? const Center(
+                  child: Text('No items found', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                )
+              : GridView.builder(
+                  padding: EdgeInsets.only(top: 8.h),
+                  physics: const BouncingScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: isWide ? 220.0 : 200.0,
+                    mainAxisExtent: math.max(88.0, 90.h),
+                    mainAxisSpacing: 10.h,
+                    crossAxisSpacing: 10.w,
+                  ),
+                  itemCount: filteredItems.length,
+                  itemBuilder: (ctx, idx) {
+                    final item = filteredItems[idx];
+                    final qty = _cart[item['_id']]?['quantity'] ?? 0;
+                    return Container(
+                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12.r),
+                        border: Border.all(
+                          color: qty > 0 ? const Color(0xFFFF5C00) : Colors.grey.shade200,
+                          width: qty > 0 ? 1.5 : 1.0,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Item Name (takes full width of card)
+                          Text(
+                            (item['name'] ?? '').toString().toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 10.5.sp,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black87,
+                              height: 1.15,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          // Bottom row: Price on left, Add/Qty on right
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(
+                                '₹${item['basePrice']}',
+                                style: TextStyle(
+                                  fontSize: 13.sp,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.blueGrey.shade800,
                                 ),
-                                itemCount: filteredItems.length,
-                                itemBuilder: (ctx, idx) {
-                                  final item = filteredItems[idx];
-                                  final qty = _cart[item['_id']]?['quantity'] ?? 0;
-                                  return Container(
-                                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(12.r),
-                                      border: Border.all(
-                                        color: qty > 0 ? Colors.orange.shade400 : Colors.grey.shade100,
+                              ),
+                              if (qty > 0)
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black87,
+                                    borderRadius: BorderRadius.circular(8.r),
+                                  ),
+                                  padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 3.h),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () => _updateQuantity(item, -1),
+                                        child: Padding(
+                                          padding: EdgeInsets.all(2.r),
+                                          child: Icon(LucideIcons.minus, size: 12.sp, color: Colors.white),
+                                        ),
                                       ),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              Text(
-                                                (item['name'] ?? '').toString().toUpperCase(),
-                                                style: TextStyle(
-                                                  fontSize: 10.sp,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: Colors.black87,
-                                                ),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                              SizedBox(height: 4.h),
-                                              Text(
-                                                '₹${item['basePrice']}',
-                                                style: TextStyle(
-                                                  fontSize: 13.sp,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: Colors.blueGrey.shade700,
-                                                ),
-                                              ),
-                                            ],
+                                      Padding(
+                                        padding: EdgeInsets.symmetric(horizontal: 4.w),
+                                        child: Text(
+                                          '$qty',
+                                          style: TextStyle(
+                                            fontSize: 11.5.sp,
+                                            fontWeight: FontWeight.w900,
+                                            color: Colors.white,
                                           ),
                                         ),
-                                        if (qty > 0)
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.black87,
-                                              borderRadius: BorderRadius.circular(8.r),
-                                            ),
-                                            padding: EdgeInsets.all(4.r),
-                                            child: Row(
-                                              children: [
-                                                GestureDetector(
-                                                  onTap: () => _updateQuantity(item, -1),
-                                                  child: Icon(LucideIcons.minus, size: 12.sp, color: Colors.white),
-                                                ),
-                                                SizedBox(width: 4.w),
-                                                Text('$qty', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, color: Colors.white)),
-                                                SizedBox(width: 4.w),
-                                                GestureDetector(
-                                                  onTap: () => _updateQuantity(item, 1),
-                                                  child: Icon(LucideIcons.plus, size: 12.sp, color: Colors.white),
-                                                ),
-                                              ],
-                                            ),
-                                          )
-                                        else
-                                          GestureDetector(
-                                            onTap: () => _updateQuantity(item, 1),
-                                            child: Container(
-                                              padding: EdgeInsets.all(6.r),
-                                              decoration: BoxDecoration(
-                                                color: Colors.grey.shade100,
-                                                borderRadius: BorderRadius.circular(8.r),
-                                              ),
-                                              child: Icon(LucideIcons.plus, size: 14.sp, color: Colors.grey.shade500),
-                                            ),
-                                          ),
-                                      ],
+                                      ),
+                                      GestureDetector(
+                                        onTap: () => _updateQuantity(item, 1),
+                                        child: Padding(
+                                          padding: EdgeInsets.all(2.r),
+                                          child: Icon(LucideIcons.plus, size: 12.sp, color: Colors.white),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              else
+                                GestureDetector(
+                                  onTap: () => _updateQuantity(item, 1),
+                                  child: Container(
+                                    padding: EdgeInsets.all(6.r),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(8.r),
                                     ),
-                                  );
-                                },
-                              ),
-                  ),
+                                    child: Icon(LucideIcons.plus, size: 13.sp, color: Colors.grey.shade700),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+    );
+  }
+
+  Widget _buildWideOrderPanel(BoxConstraints constraints) {
+    final panelWidth = (constraints.maxWidth * 0.38).clamp(280.0, 360.0);
+    return Container(
+      width: panelWidth,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(left: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${_totalItemQuantity()} items',
+                      style: TextStyle(
+                        fontSize: 14.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      'Order Summary',
+                      style: TextStyle(
+                        fontSize: 11.sp,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'TOTAL',
+                      style: TextStyle(
+                        fontSize: 9.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.grey,
+                        letterSpacing: 1,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      '₹${_totalPrice()}',
+                      style: TextStyle(
+                        fontSize: 20.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-
-            if (showOrderPanel && (_cart.isNotEmpty || _existingItems.isNotEmpty))
-              _buildBottomSheet(),
-
-            if (widget.onCartConfirmed != null && _cart.isNotEmpty)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: EdgeInsets.all(24.r),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(32.r)),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 40)],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          Divider(height: 1, color: Colors.grey.shade100, thickness: 1),
+          Expanded(
+            child: (_cart.isEmpty && _existingItems.isEmpty)
+                ? Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24.r),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text("SELECTED", style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: Colors.grey, letterSpacing: 1)),
-                          Text("₹${_newItemsTotal()}", style: TextStyle(fontSize: 24.sp, fontWeight: FontWeight.w900, color: Colors.black)),
+                          Icon(LucideIcons.shoppingBag, size: 40.sp, color: Colors.grey.shade300),
+                          SizedBox(height: 12.h),
+                          Text(
+                            'Your cart is empty',
+                            style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.bold, color: Colors.grey.shade500),
+                          ),
+                          SizedBox(height: 4.h),
+                          Text(
+                            'Tap items on the left to add them to this order',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 11.sp, color: Colors.grey.shade400),
+                          ),
                         ],
                       ),
-                      ElevatedButton(
-                        onPressed: _handleSendOrder,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: EdgeInsets.symmetric(horizontal: 40.w, vertical: 16.h),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                        ),
-                        child: Text(_confirmButtonLabel(), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1)),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            if (_showQR && _qrData != null)
-              Container(
-                color: Colors.black87,
-                alignment: Alignment.center,
-                child: Container(
-                  margin: EdgeInsets.all(32.r),
-                  padding: EdgeInsets.all(24.r),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24.r)),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                    ),
+                  )
+                : ListView(
+                    padding: EdgeInsets.zero,
+                    physics: const BouncingScrollPhysics(),
                     children: [
-                      Text("Scan & Pay", style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.bold)),
-                      SizedBox(height: 16.h),
-                      if (_qrData!['qrImageUrl'] != null)
-                        Image.network(_qrData!['qrImageUrl'], height: 200.h, width: 200.w),
-                      SizedBox(height: 12.h),
-                      Text("UPI ID: ${_qrData!['upiId']}", style: TextStyle(fontWeight: FontWeight.bold)),
-                      SizedBox(height: 24.h),
-                      ElevatedButton(
-                        onPressed: _resetAndClose,
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 12.h)),
-                        child: const Text("Done", style: TextStyle(color: Colors.white)),
-                      ),
+                      ..._existingItems.values.map((line) => _buildCartLine(line, true)),
+                      ..._cart.values.map((item) => _buildCartLine(item, false)),
                     ],
                   ),
-                ),
-              ),
+          ),
+          Container(
+            padding: EdgeInsets.all(16.w),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: Colors.grey.shade100)),
+            ),
+            child: widget.onCartConfirmed != null
+                ? SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _cart.isEmpty ? null : () => _handleSendOrder(shouldPrintKOT: false),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 14.h),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                      ),
+                      child: Text(
+                        _confirmButtonLabel(withPrint: false),
+                        style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1),
+                      ),
+                    ),
+                  )
+                : _buildPlaceOrderBtn(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQRModal() {
+    return Container(
+      color: Colors.black87,
+      alignment: Alignment.center,
+      child: Container(
+        margin: EdgeInsets.all(32.r),
+        padding: EdgeInsets.all(24.r),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24.r)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Scan & Pay", style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16.h),
+            if (_qrData!['qrImageUrl'] != null)
+              Image.network(_qrData!['qrImageUrl'], height: 200.h, width: 200.w),
+            SizedBox(height: 12.h),
+            Text("UPI ID: ${_qrData!['upiId']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 24.h),
+            ElevatedButton(
+              onPressed: _resetAndClose,
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 12.h)),
+              child: const Text("Done", style: TextStyle(color: Colors.white)),
+            ),
           ],
         ),
       ),
@@ -1223,7 +1459,87 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   }
 
   Widget _buildPlaceOrderBtn() {
-    bool disabled = _isSubmitDisabled();
+    final bool disabled = _isSubmitDisabled();
+    final bool canPrint = _canPrintKOT;
+
+    // When KOT printing is enabled: show two buttons (matches JS canPrintKOT flow)
+    if (canPrint) {
+      return Column(
+        children: [
+          // Primary: Place Order + KOT
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: disabled
+                  ? null
+                  : () {
+                      setState(() => _mobileSheetExpanded = false);
+                      _handleSendOrder(shouldPrintKOT: true);
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: disabled ? Colors.grey.shade300 : Colors.deepOrange,
+                foregroundColor: Colors.white,
+                elevation: disabled ? 0 : 8,
+                shadowColor: Colors.deepOrange.withValues(alpha: 0.4),
+                padding: EdgeInsets.symmetric(vertical: 14.h),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(LucideIcons.printer, size: 14.sp),
+                  SizedBox(width: 6.w),
+                  Text(
+                    _confirmButtonLabel(withPrint: true),
+                    style: TextStyle(
+                      fontSize: 12.sp,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: 8.h),
+          // Secondary: Save/Place without KOT
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: disabled
+                  ? null
+                  : () {
+                      setState(() => _mobileSheetExpanded = false);
+                      _handleSendOrder(shouldPrintKOT: false);
+                    },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: disabled ? Colors.grey.shade300 : const Color(0xFF64748B),
+                side: BorderSide(
+                  color: disabled ? Colors.grey.shade200 : const Color(0xFFCBD5E1),
+                  width: 2,
+                ),
+                padding: EdgeInsets.symmetric(vertical: 10.h),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: Text(
+                _confirmButtonLabel(withPrint: false),
+                style: TextStyle(
+                  fontSize: 11.sp,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // No KOT enabled: single button
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
@@ -1231,7 +1547,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             ? null
             : () {
                 setState(() => _mobileSheetExpanded = false);
-                _handleSendOrder();
+                _handleSendOrder(shouldPrintKOT: false);
               },
         style: ElevatedButton.styleFrom(
           backgroundColor: disabled ? Colors.grey.shade300 : Colors.deepOrange,
@@ -1244,7 +1560,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           ),
         ),
         child: Text(
-          _confirmButtonLabel(),
+          _confirmButtonLabel(withPrint: false),
           style: TextStyle(
             fontSize: 12.sp,
             fontWeight: FontWeight.w900,
@@ -1254,62 +1570,5 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       ),
     );
   }
-
-  Widget _buildPaymentModeButton({
-    required String label,
-    required bool isSelected,
-    required Color selectedColor,
-    required VoidCallback onPressed,
-  }) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isSelected ? selectedColor : Colors.white,
-        foregroundColor: isSelected ? Colors.white : Colors.grey.shade400,
-        elevation: isSelected ? 4 : 0,
-        shadowColor: selectedColor.withValues(alpha: 0.3),
-        padding: EdgeInsets.symmetric(vertical: 14.h),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16.r),
-          side: isSelected ? BorderSide.none : BorderSide(color: Colors.grey.shade200, width: 1.5),
-        ),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12.sp,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 1,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPaymentMethodButton({
-    required String label,
-    required bool isSelected,
-    required VoidCallback onPressed,
-  }) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isSelected ? Colors.blue.shade600 : Colors.white,
-        foregroundColor: isSelected ? Colors.white : Colors.grey.shade700,
-        elevation: isSelected ? 2 : 0,
-        padding: EdgeInsets.symmetric(vertical: 10.h),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12.r),
-          side: isSelected ? BorderSide.none : BorderSide(color: Colors.grey.shade200),
-        ),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 10.sp,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
 }
+

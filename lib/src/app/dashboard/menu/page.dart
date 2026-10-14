@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -930,7 +931,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
             ),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final isMobile = constraints.maxWidth < 700.w;
+                final isMobile = constraints.maxWidth < 700;
                 return Column(
                   children: [
                     Row(
@@ -1063,7 +1064,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                 // Desktop Category Sidebar
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    final isDesktop = MediaQuery.of(context).size.width > 900.w;
+                    final isDesktop = MediaQuery.of(context).size.width >= 768;
                     if (!isDesktop) return const SizedBox.shrink();
                     return _buildCategoryDrawerConfig(isDrawer: false);
                   },
@@ -1135,8 +1136,8 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                               : GridView.builder(
                                   gridDelegate:
                                       SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: 480.w,
-                                    mainAxisExtent: 220.h,
+                                    maxCrossAxisExtent: 420.0,
+                                    mainAxisExtent: math.max(185.0, 200.h),
                                     crossAxisSpacing: 16.w,
                                     mainAxisSpacing: 16.h,
                                   ),
@@ -1878,8 +1879,8 @@ class _MenuPageState extends ConsumerState<MenuPage> {
   Widget _buildAddFormDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
-      width: MediaQuery.of(context).size.width > 450.w
-          ? 420.w
+      width: MediaQuery.of(context).size.width > 450
+          ? 420.0
           : MediaQuery.of(context).size.width * 0.9,
       child: SafeArea(
         child: Padding(

@@ -126,12 +126,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       });
     }
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isTablet = screenWidth >= 600;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: Row(
         children: [
           // Carousel Section (Hidden on small screens)
-          if (1.sw >= 900)
+          if (screenWidth >= 900)
             Expanded(
               child: Stack(
                 fit: StackFit.expand,
@@ -152,37 +155,37 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     left: 0,
                     right: 0,
                     child: Padding(
-                      padding: EdgeInsets.all(64.0.r),
+                      padding: EdgeInsets.all(36.r),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             _onboardingData[_activeSlide]['title']!,
                             style: TextStyle(
-                              fontSize: 48.sp,
+                              fontSize: 26.sp,
                               fontWeight: FontWeight.w900,
                               color: Colors.white,
                             ),
                           ),
-                          SizedBox(height: 16.h),
+                          SizedBox(height: 12.h),
                           Text(
                             _onboardingData[_activeSlide]['description']!,
                             style: TextStyle(
-                              fontSize: 20.sp,
+                              fontSize: 13.5.sp,
                               color: Colors.white70,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          SizedBox(height: 32.h),
+                          SizedBox(height: 24.h),
                           Row(
                             children: List.generate(_onboardingData.length, (
                               index,
                             ) {
                               return AnimatedContainer(
                                 duration: const Duration(milliseconds: 300),
-                                margin: EdgeInsets.only(right: 8.w),
-                                height: 6.h,
-                                width: _activeSlide == index ? 32.w : 8.w,
+                                margin: EdgeInsets.only(right: 6.w),
+                                height: 4.h,
+                                width: _activeSlide == index ? 24.w : 6.w,
                                 decoration: BoxDecoration(
                                   color: _activeSlide == index
                                       ? const Color(0xFFFF5C00)
@@ -204,24 +207,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           Expanded(
             child: SingleChildScrollView(
               child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: 24.0.w,
-                    vertical: 1.sh < 700 ? 24.0.h : 48.0.h,
-                  ),
+                padding: EdgeInsets.symmetric(
+                  horizontal: 24.0.w,
+                  vertical: isTablet ? 24.0.h : (1.sh < 700 ? 16.0.h : 32.0.h),
+                ),
                 child: Center(
                   child: Container(
-                    constraints: BoxConstraints(maxWidth: 420.w),
+                    constraints: const BoxConstraints(maxWidth: 460),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
                             Container(
-                              width: 40.w,
-                              height: 40.w,
+                              width: 32.r,
+                              height: 32.r,
                               decoration: BoxDecoration(
                                 color: const Color(0xFFFF5C00),
-                                borderRadius: BorderRadius.circular(12.r),
+                                borderRadius: BorderRadius.circular(10.r),
                               ),
                               alignment: Alignment.center,
                               child: Text(
@@ -229,7 +232,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w900,
-                                  fontSize: 20.sp,
+                                  fontSize: 16.sp,
                                 ),
                               ),
                             ),
@@ -237,32 +240,33 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             Text(
                               'QRserve',
                               style: TextStyle(
-                                fontSize: 24.sp,
+                                fontSize: 20.sp,
                                 fontWeight: FontWeight.w900,
                                 color: const Color(0xFF0F172A),
-                                letterSpacing: -1,
+                                letterSpacing: -0.5,
                               ),
                             ),
                           ],
                         ),
-                        SizedBox(height: 32.h),
+                        SizedBox(height: 20.h),
                         Text(
                           'Welcome Back',
                           style: TextStyle(
-                            fontSize: 32.sp,
+                            fontSize: 22.sp,
                             fontWeight: FontWeight.w900,
                             color: const Color(0xFF0F172A),
                           ),
                         ),
-                        SizedBox(height: 8.h),
-                        const Text(
+                        SizedBox(height: 6.h),
+                        Text(
                           'Access your admin control center.',
                           style: TextStyle(
-                            color: Colors.grey,
-                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade600,
+                            fontSize: 13.sp,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
-                        SizedBox(height: 40.h),
+                        SizedBox(height: 20.h),
 
                         // Form Fields
                         _buildLabel('Email Address'),
@@ -281,10 +285,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           true,
                         ),
 
-                        SizedBox(height: 16.h),
+                        SizedBox(height: 12.h),
                         SizedBox(
                           width: double.infinity,
-                          height: 56.h,
+                          height: 48.h,
                           child: ElevatedButton(
                             onPressed: _isFormValid && !_isLoading
                                 ? _handleLogin
@@ -293,12 +297,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                               backgroundColor: const Color(0xFFFF5C00),
                               disabledBackgroundColor: Colors.grey.shade200,
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16.r),
+                                borderRadius: BorderRadius.circular(10.r),
                               ),
                             ),
                             child: _isLoading
-                                ? const CircularProgressIndicator(
-                                    color: Colors.white,
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
                                   )
                                 : Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
@@ -306,18 +315,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                       Text(
                                         'Enter Dashboard',
                                         style: TextStyle(
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 14.sp,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 13.5.sp,
                                           color: _isFormValid
                                               ? Colors.white
                                               : Colors.grey.shade400,
-                                          letterSpacing: 1,
+                                          letterSpacing: 0.5,
                                         ),
                                       ),
                                       SizedBox(width: 8.w),
                                       Icon(
                                         LucideIcons.arrowRight,
-                                        size: 20.sp,
+                                        size: 16.sp,
                                         color: _isFormValid
                                             ? Colors.white
                                             : Colors.grey.shade400,
@@ -327,16 +336,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           ),
                         ),
 
-                        SizedBox(height: 40.h),
+                        SizedBox(height: 24.h),
                         Center(
                           child: Wrap(
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              const Text(
+                              Text(
                                 'Don\'t have an account? ',
                                 style: TextStyle(
-                                  color: Colors.grey,
-                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey.shade600,
+                                  fontSize: 13.sp,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                               InkWell(
@@ -345,8 +355,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                   'Sign Up',
                                   style: TextStyle(
                                     color: const Color(0xFFFF5C00),
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 14.sp,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13.sp,
                                   ),
                                 ),
                               ),
@@ -367,14 +377,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   Widget _buildLabel(String text) {
     return Padding(
-      padding: EdgeInsets.only(left: 4.w, bottom: 8.h),
+      padding: EdgeInsets.only(left: 4.w, bottom: 6.h),
       child: Text(
         text.toUpperCase(),
         style: TextStyle(
           fontSize: 11.sp,
-          fontWeight: FontWeight.w900,
-          color: Colors.grey,
-          letterSpacing: 1.5,
+          fontWeight: FontWeight.w800,
+          color: Colors.grey.shade600,
+          letterSpacing: 1.2,
         ),
       ),
     );
@@ -387,11 +397,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     bool isPassword,
   ) {
     return Container(
-      margin: EdgeInsets.only(bottom: 24.h),
+      margin: EdgeInsets.only(bottom: 14.h),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(16.r),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: Colors.grey.shade300),
       ),
       child: TextField(
         obscureText: isPassword,
@@ -399,14 +409,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         style: TextStyle(
           fontWeight: FontWeight.w600,
           color: const Color(0xFF334155),
-          fontSize: 14.sp,
+          fontSize: 13.5.sp,
         ),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(color: Colors.grey),
-          prefixIcon: Icon(icon, color: Colors.grey, size: 20.sp),
+          hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13.5.sp),
+          prefixIcon: Icon(icon, color: Colors.grey.shade500, size: 18.sp),
           border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: 18.h),
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
         ),
       ),
     );

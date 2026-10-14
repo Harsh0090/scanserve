@@ -121,7 +121,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
       body: Row(
         children: [
           // Carousel Section (Hidden on small screens)
-          if (1.sw >= 900)
+          if (MediaQuery.of(context).size.width >= 900)
             Expanded(
               child: Stack(
                 fit: StackFit.expand,
@@ -142,28 +142,30 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                     left: 0,
                     right: 0,
                     child: Padding(
-                      padding: EdgeInsets.all(64.r),
+                      padding: EdgeInsets.all(36.r),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             _onboardingData[_activeSlide]['title']!,
                             style: TextStyle(
-                              fontSize: 48.sp,
+                              fontSize: 26.sp,
                               fontWeight: FontWeight.w900,
                               color: Colors.white,
+                              height: 1.2,
                             ),
                           ),
-                          SizedBox(height: 16.h),
+                          SizedBox(height: 10.h),
                           Text(
                             _onboardingData[_activeSlide]['description']!,
                             style: TextStyle(
-                              fontSize: 20.sp,
+                              fontSize: 13.5.sp,
                               color: Colors.white70,
                               fontWeight: FontWeight.w500,
+                              height: 1.4,
                             ),
                           ),
-                          SizedBox(height: 32.h),
+                          SizedBox(height: 20.h),
                           Row(
                             children: List.generate(_onboardingData.length, (index) {
                               return AnimatedContainer(
@@ -191,23 +193,23 @@ class _SignupPageState extends ConsumerState<SignupPage> {
             child: SingleChildScrollView(
               child: Padding(
                 padding: EdgeInsets.symmetric(
-                  horizontal: 24.w,
-                  vertical: 1.sh < 700 ? 24.h : 48.h,
+                  horizontal: 28.w,
+                  vertical: 24.h,
                 ),
                 child: Center(
                   child: Container(
-                    constraints: BoxConstraints(maxWidth: 420.w),
+                    constraints: const BoxConstraints(maxWidth: 460),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
                             Container(
-                              width: 40.w,
-                              height: 40.w,
+                              width: 32.r,
+                              height: 32.r,
                               decoration: BoxDecoration(
                                 color: const Color(0xFFFF5C00),
-                                borderRadius: BorderRadius.circular(12.r),
+                                borderRadius: BorderRadius.circular(8.r),
                               ),
                               alignment: Alignment.center,
                               child: Text(
@@ -215,7 +217,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w900,
-                                  fontSize: 20.sp,
+                                  fontSize: 16.sp,
                                 ),
                               ),
                             ),
@@ -223,49 +225,50 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                             Text(
                               'QRserve',
                               style: TextStyle(
-                                fontSize: 24.sp,
+                                fontSize: 20.sp,
                                 fontWeight: FontWeight.w900,
                                 color: const Color(0xFF0F172A),
-                                letterSpacing: -1,
+                                letterSpacing: -0.5,
                               ),
                             ),
                           ],
                         ),
-                        SizedBox(height: 32.h),
+                        SizedBox(height: 20.h),
                         Text(
                           'Create Partner Account',
                           style: TextStyle(
-                            fontSize: 32.sp,
+                            fontSize: 22.sp,
                             fontWeight: FontWeight.w900,
                             color: const Color(0xFF0F172A),
+                            letterSpacing: -0.5,
                           ),
                         ),
-                        SizedBox(height: 8.h),
+                        SizedBox(height: 6.h),
                         const Text(
                           'Join the network of modern food businesses.',
-                          style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600),
+                          style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w500),
                         ),
-                        SizedBox(height: 40.h),
+                        SizedBox(height: 24.h),
 
                         // Form Fields
                         _buildLabel('Business Nature'),
                         Container(
-                          margin: EdgeInsets.only(bottom: 24.h),
-                          padding: EdgeInsets.symmetric(horizontal: 16.w),
+                          margin: EdgeInsets.only(bottom: 14.h),
+                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 2.h),
                           decoration: BoxDecoration(
                             color: const Color(0xFFF8FAFC),
-                            borderRadius: BorderRadius.circular(16.r),
-                            border: Border.all(color: Colors.grey.shade200),
+                            borderRadius: BorderRadius.circular(10.r),
+                            border: Border.all(color: Colors.grey.shade300),
                           ),
                           child: Row(
                             children: [
-                              Icon(LucideIcons.building2, color: Colors.grey, size: 20.sp),
-                              SizedBox(width: 12.w),
+                              Icon(LucideIcons.building2, color: Colors.grey.shade500, size: 18.sp),
+                              SizedBox(width: 10.w),
                               Expanded(
                                 child: DropdownButtonHideUnderline(
                                   child: DropdownButton<String>(
                                     value: _form['businessType'] == '' ? null : _form['businessType'],
-                                    hint: const Text('Select Business Type', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
+                                    hint: Text('Select Business Type', style: TextStyle(color: Colors.grey.shade500, fontSize: 13.5.sp, fontWeight: FontWeight.w500)),
                                     isExpanded: true,
                                     icon: const Icon(LucideIcons.chevronDown, color: Colors.grey),
                                     items: [
@@ -273,14 +276,14 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                                         value: 'RESTAURANT',
                                         child: Text(
                                           'Cafe / Restaurant',
-                                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: const Color(0xFF334155)),
+                                          style: TextStyle(fontSize: 13.5.sp, fontWeight: FontWeight.w600, color: const Color(0xFF334155)),
                                         ),
                                       ),
                                       DropdownMenuItem(
                                         value: 'FOOD_TRUCK',
                                         child: Text(
                                           'Food Truck',
-                                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: const Color(0xFF334155)),
+                                          style: TextStyle(fontSize: 13.5.sp, fontWeight: FontWeight.w600, color: const Color(0xFF334155)),
                                         ),
                                       ),
                                     ],
@@ -343,11 +346,11 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                         ),
                         if (_form['gstEnabled'])
                           Container(
-                            margin: EdgeInsets.only(top: 8.h, bottom: 24.h),
-                            padding: EdgeInsets.symmetric(horizontal: 16.w),
+                            margin: EdgeInsets.only(top: 6.h, bottom: 14.h),
+                            padding: EdgeInsets.symmetric(horizontal: 14.w),
                             decoration: BoxDecoration(
                               color: const Color(0xFFF8FAFC),
-                              borderRadius: BorderRadius.circular(16.r),
+                              borderRadius: BorderRadius.circular(10.r),
                               border: Border.all(color: Colors.grey.shade200),
                             ),
                             child: DropdownButtonHideUnderline(
@@ -369,21 +372,22 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                             ),
                           ),
                         
-                        SizedBox(height: 16.h),
+                        SizedBox(height: 12.h),
                         SizedBox(
                           width: double.infinity,
-                          height: 56.h,
+                          height: 48.h,
                           child: ElevatedButton(
                             onPressed: _isFormValid && !_isLoading ? _submit : null,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFFFF5C00),
                               disabledBackgroundColor: Colors.grey.shade200,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
                             ),
                             child: _isLoading
                                 ? SizedBox(
-                                    width: 24.w,
-                                    height: 24.w,
+                                    width: 20.r,
+                                    height: 20.r,
                                     child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                                   )
                                 : Row(
@@ -401,7 +405,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                                       SizedBox(width: 8.w),
                                       Icon(
                                         LucideIcons.arrowRight,
-                                        size: 20.sp,
+                                        size: 16.sp,
                                         color: _isFormValid ? Colors.white : Colors.grey.shade400,
                                       ),
                                     ],
@@ -409,20 +413,71 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                           ),
                         ),
 
-                        SizedBox(height: 40.h),
+                        // Missing fields checklist — only shown when form is incomplete
+                        if (!_isFormValid) ...[
+                          SizedBox(height: 12.h),
+                          Container(
+                            padding: EdgeInsets.all(12.r),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF7ED),
+                              borderRadius: BorderRadius.circular(12.r),
+                              border: Border.all(color: const Color(0xFFFF5C00).withAlpha(60)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Complete these to continue:',
+                                  style: TextStyle(
+                                    fontSize: 11.sp,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFF92400E),
+                                  ),
+                                ),
+                                SizedBox(height: 8.h),
+                                ...[
+                                  if (_form['businessType'] == '')
+                                    '• Select a Business Type',
+                                  if (_form['businessType'] != '' && _form['mode'] == '')
+                                    '• Choose how you will use the app (Orders only / Full setup)',
+                                  if (_form['organizationName'].toString().isEmpty)
+                                    '• Enter your Brand Name',
+                                  if (!_form['email'].toString().contains('@'))
+                                    '• Enter a valid Email address',
+                                  if (_form['phone'].toString().length < 10)
+                                    '• Phone number must be at least 10 digits',
+                                  if (_form['password'].toString().length < 6)
+                                    '• Password must be at least 6 characters',
+                                ].map((msg) => Padding(
+                                  padding: EdgeInsets.only(bottom: 4.h),
+                                  child: Text(
+                                    msg,
+                                    style: TextStyle(
+                                      fontSize: 11.sp,
+                                      fontWeight: FontWeight.w600,
+                                      color: const Color(0xFFB45309),
+                                    ),
+                                  ),
+                                )),
+                              ],
+                            ),
+                          ),
+                        ],
+
+                        SizedBox(height: 24.h),
                         Center(
                           child: Wrap(
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
                               Text(
                                 'Already have an account? ',
-                                style: TextStyle(fontSize: 12.sp, color: Colors.grey, fontWeight: FontWeight.w600),
+                                style: TextStyle(fontSize: 13.sp, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
                               ),
                               InkWell(
                                 onTap: () => context.go('/login'),
                                 child: Text(
                                   'Log In',
-                                  style: TextStyle(fontSize: 12.sp, color: const Color(0xFFFF5C00), fontWeight: FontWeight.w900),
+                                  style: TextStyle(fontSize: 13.sp, color: const Color(0xFFFF5C00), fontWeight: FontWeight.w800),
                                 ),
                               )
                             ],
@@ -442,14 +497,14 @@ class _SignupPageState extends ConsumerState<SignupPage> {
 
   Widget _buildLabel(String text) {
     return Padding(
-      padding: EdgeInsets.only(left: 4.w, bottom: 8.h),
+      padding: EdgeInsets.only(left: 2.w, bottom: 6.h),
       child: Text(
         text.toUpperCase(),
         style: TextStyle(
           fontSize: 11.sp,
-          fontWeight: FontWeight.w900,
-          color: Colors.grey,
-          letterSpacing: 1.5,
+          fontWeight: FontWeight.w800,
+          color: Colors.grey.shade600,
+          letterSpacing: 1.2,
         ),
       ),
     );
@@ -457,22 +512,23 @@ class _SignupPageState extends ConsumerState<SignupPage> {
 
   Widget _buildTextField(IconData icon, String hint, Function(String) onChanged, bool isPassword) {
     return Container(
-      margin: EdgeInsets.only(bottom: 24.h),
+      margin: EdgeInsets.only(bottom: 14.h),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(16.r),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: Colors.grey.shade300),
       ),
       child: TextField(
         obscureText: isPassword,
         onChanged: onChanged,
-        style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: const Color(0xFF334155)),
+        style: TextStyle(fontSize: 13.5.sp, fontWeight: FontWeight.w600, color: const Color(0xFF334155)),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(color: Colors.grey),
-          prefixIcon: Icon(icon, color: Colors.grey, size: 20.sp),
+          hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13.5.sp),
+          prefixIcon: Icon(icon, color: Colors.grey.shade500, size: 18.sp),
           border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: 18.h),
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
         ),
       ),
     );
@@ -547,3 +603,4 @@ class _SignupPageState extends ConsumerState<SignupPage> {
     );
   }
 }
+

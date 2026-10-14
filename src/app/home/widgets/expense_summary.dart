@@ -224,3 +224,4 @@ class ExpenseSummary extends StatelessWidget {
       .toStringAsFixed(0)
       .replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
 }
+

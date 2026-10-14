@@ -2150,15 +2150,23 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8FAFB),
-      endDrawer: MenuModal(
-        table: _selectedTable,
-        onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
-        onOrderPlaced: (newOrder) {
-          _fetchTables();
-        },
-        sendAppendOrder: _selectedTable != null && _selectedTable!['status'] == 'Running' 
-            ? _selectedTable 
-            : null,
+      endDrawer: SizedBox(
+        width: MediaQuery.of(context).size.width >= 768
+            ? math.min(740.0, MediaQuery.of(context).size.width * 0.75)
+            : MediaQuery.of(context).size.width,
+        child: Drawer(
+          elevation: 16,
+          child: MenuModal(
+            table: _selectedTable,
+            onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
+            onOrderPlaced: (newOrder) {
+              _fetchTables();
+            },
+            sendAppendOrder: _selectedTable != null && _selectedTable!['status'] == 'Running' 
+                ? _selectedTable 
+                : null,
+          ),
+        ),
       ),
       body: Stack(
         children: [
@@ -2170,7 +2178,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                 // Header
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    final isMobile = 1.sw < 768;
+                    final isMobile = MediaQuery.of(context).size.width < 768;
                     return Wrap(
                       alignment: WrapAlignment.spaceBetween,
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -2178,7 +2186,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                       runSpacing: 16.h,
                       children: [
                         SizedBox(
-                          width: isMobile ? 1.sw : null,
+                          width: isMobile ? constraints.maxWidth : null,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -2316,7 +2324,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                             maxCrossAxisExtent: 180.w,
                             mainAxisSpacing: 16.h,
                             crossAxisSpacing: 16.w,
-                            childAspectRatio: 1,
+                            childAspectRatio: 0.92,
                           ),
                           itemCount: tables.length,
                           itemBuilder: (ctx, idx) {
@@ -2588,7 +2596,7 @@ class _SkeletonAreaState extends State<SkeletonArea> with SingleTickerProviderSt
                 maxCrossAxisExtent: 180.w,
                 mainAxisSpacing: 16.h,
                 crossAxisSpacing: 16.w,
-                childAspectRatio: 1,
+                childAspectRatio: 0.92,
               ),
               itemCount: 6,
               itemBuilder: (ctx, idx) {

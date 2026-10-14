@@ -146,7 +146,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 24.h),
         child: Center(
           child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: 800.w),
+            constraints: const BoxConstraints(maxWidth: 800),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

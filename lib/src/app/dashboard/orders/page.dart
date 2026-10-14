@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -2536,7 +2537,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       });
     }
 
-    final isMobile = 1.sw < 768;
+    final isMobile = MediaQuery.of(context).size.width < 768;
 
     if (_activeFilter == 'LIVE') {
       _activeFilter = 'All';
@@ -2628,23 +2629,31 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
     return Scaffold(
       key: _scaffoldKey,
-      endDrawer: MenuModal(
-        onClose: () {
-          _scaffoldKey.currentState?.closeEndDrawer();
-          setState(() => _appendTarget = null);
-        },
-        sendAppendOrder: _appendTarget,
-        onOrderPlaced: (newOrder) {
-          if (newOrder is Map) {
-            setState(() {
-              final orderId = newOrder['_id'];
-              final exists = _orders.any((o) => o is Map && o['_id'].toString() == orderId.toString());
-              if (!exists) {
-                _orders.insert(0, newOrder);
+      endDrawer: SizedBox(
+        width: MediaQuery.of(context).size.width >= 768
+            ? math.min(740.0, MediaQuery.of(context).size.width * 0.75)
+            : MediaQuery.of(context).size.width,
+        child: Drawer(
+          elevation: 16,
+          child: MenuModal(
+            onClose: () {
+              _scaffoldKey.currentState?.closeEndDrawer();
+              setState(() => _appendTarget = null);
+            },
+            sendAppendOrder: _appendTarget,
+            onOrderPlaced: (newOrder) {
+              if (newOrder is Map) {
+                setState(() {
+                  final orderId = newOrder['_id'];
+                  final exists = _orders.any((o) => o is Map && o['_id'].toString() == orderId.toString());
+                  if (!exists) {
+                    _orders.insert(0, newOrder);
+                  }
+                });
               }
-            });
-          }
-        },
+            },
+          ),
+        ),
       ),
       backgroundColor: const Color(0xFFFDFCF8),
       body: Stack(
@@ -3096,7 +3105,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                           crossAxisCount: crossCount,
                                           crossAxisSpacing: 16.w,
                                           mainAxisSpacing: 16.h,
-                                          childAspectRatio: 2.5,
+                                          mainAxisExtent: 85,
                                         ),
                                     itemCount: topSelling.length,
                                     itemBuilder: (ctx, idx) {
@@ -3310,7 +3319,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 maxCrossAxisExtent: 420.w,
                                 mainAxisSpacing: 24.h,
                                 crossAxisSpacing: 24.w,
-                                childAspectRatio: isPayLaterTab ? 0.54 : (isFoodTruck ? 0.82 : 0.70),
+                                childAspectRatio: isPayLaterTab ? 0.50 : (isFoodTruck ? 0.76 : 0.64),
                               ),
                               delegate: SliverChildBuilderDelegate(
                                 (context, index) {

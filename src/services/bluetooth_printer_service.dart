@@ -387,7 +387,7 @@ class BluetoothPrinterService {
             styles: const PosStyles(align: PosAlign.center),
           ),
           PosColumn(
-            text: '₹${total.toStringAsFixed(2)}',
+            text: 'Rs. ${total.toStringAsFixed(2)}',
             width: 4,
             styles: const PosStyles(align: PosAlign.right),
           ),
@@ -406,7 +406,7 @@ class BluetoothPrinterService {
       generator.row([
         PosColumn(text: 'Subtotal:', width: 6),
         PosColumn(
-          text: '₹${subTotal.toStringAsFixed(2)}',
+          text: 'Rs. ${subTotal.toStringAsFixed(2)}',
           width: 6,
           styles: const PosStyles(align: PosAlign.right),
         ),
@@ -418,7 +418,7 @@ class BluetoothPrinterService {
         generator.row([
           PosColumn(text: 'GST ($gstRate%):', width: 6),
           PosColumn(
-            text: '₹${gstAmount.toStringAsFixed(2)}',
+            text: 'Rs. ${gstAmount.toStringAsFixed(2)}',
             width: 6,
             styles: const PosStyles(align: PosAlign.right),
           ),
@@ -434,7 +434,7 @@ class BluetoothPrinterService {
           styles: const PosStyles(bold: true, height: PosTextSize.size2),
         ),
         PosColumn(
-          text: '₹${total.toStringAsFixed(2)}',
+          text: 'Rs. ${total.toStringAsFixed(2)}',
           width: 6,
           styles: const PosStyles(
             align: PosAlign.right,

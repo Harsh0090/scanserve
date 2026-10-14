@@ -24,6 +24,8 @@ import 'dashboard/createmanager/page.dart';
 import 'dashboard/createbranch/page.dart';
 import 'dashboard/IncreaseBranchLimit/page.dart';
 import 'dashboard/payment_setup/page.dart';
+import 'dashboard/settings/page.dart';
+import 'dashboard/profile/page.dart';
 import 'public/RestaurantMenuPage.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
@@ -47,20 +49,31 @@ class RootLayout extends ConsumerWidget {
     ref.watch(trialProvider);
     ref.watch(onboardingProvider);
 
-    return ScreenUtilInit(
-      designSize: const Size(402, 885),
-      minTextAdapt: true,
-      splitScreenMode: true,
-      builder: (_, child) {
-        return MaterialApp.router(
-          title: 'ScanServe',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-            fontFamily: 'SF Pro Display',
-            colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFF5C00)),
-          ),
-          routerConfig: _router,
+    // Use LayoutBuilder to pick the design size based on actual screen width.
+    // Tablet breakpoint: 768dp and above → use 1024×768 design canvas.
+    // Phone (< 768dp) keeps the original 402×885 canvas.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isTablet = constraints.maxWidth >= 768;
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        return ScreenUtilInit(
+          designSize: isTablet
+              ? (isLandscape ? const Size(1024, 768) : const Size(768, 1024))
+              : const Size(402, 885),
+          minTextAdapt: true,
+          splitScreenMode: true,
+          builder: (_, child) {
+            return MaterialApp.router(
+              title: 'ScanServe',
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData(
+                scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+                fontFamily: 'SF Pro Display',
+                colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFF5C00)),
+              ),
+              routerConfig: _router,
+            );
+          },
         );
       },
     );
@@ -140,6 +153,14 @@ final GoRouter _router = GoRouter(
         GoRoute(
           path: '/dashboard/payment-setup',
           builder: (context, state) => const PaymentSetupPage(),
+        ),
+        GoRoute(
+          path: '/dashboard/settings',
+          builder: (context, state) => const SettingsPage(),
+        ),
+        GoRoute(
+          path: '/dashboard/profile',
+          builder: (context, state) => const ProfilePage(),
         ),
       ],
     ),

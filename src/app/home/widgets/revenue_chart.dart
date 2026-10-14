@@ -220,3 +220,4 @@ class RevenueChart extends StatelessWidget {
     return v.toStringAsFixed(0);
   }
 }
+
