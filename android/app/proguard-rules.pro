@@ -34,7 +34,7 @@
 -keepattributes InnerClasses
 
 # Prevent R8 from stripping Dart-generated classes
--keep class com.example.frontend.** { *; }
+-keep class com.scanserveApp.** { *; }
 
 # Google Play Core (Flutter deferred components - not needed for standard APK builds)
 -dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
