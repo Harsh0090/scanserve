@@ -320,7 +320,7 @@ class BluetoothPrinterService {
     final List<int> bytes = [];
 
     final restName = bill['restaurantName']?.toString() ?? 'RESTAURANT';
-    final tableNum = bill['tableNumber']?.toString() ?? '-';
+    final tableNum = bill['tableNumber']?.toString() ?? bill['tableName']?.toString() ?? '-';
 
     bytes.addAll(
       generator.text(
@@ -344,7 +344,8 @@ class BluetoothPrinterService {
     final now = DateTime.now();
     bytes.addAll(
       generator.text(
-        '${now.day}/${now.month}/${now.year} ${now.hour}:${now.minute.toString().padLeft(2, '0')}',
+        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
         styles: const PosStyles(align: PosAlign.center),
       ),
     );
@@ -373,10 +374,23 @@ class BluetoothPrinterService {
     final items = bill['items'] as List? ?? [];
     for (final i in items) {
       if (i is! Map) continue;
-      final name = i['name']?.toString() ?? 'Item';
-      final qty = i['quantity'] ?? 1;
-      final price = num.tryParse((i['basePrice'] ?? 0).toString()) ?? 0;
-      final total = price * (qty is num ? qty : 1);
+      String name = 'Item';
+      if (i['name'] != null && i['name'].toString().trim().isNotEmpty) {
+        name = i['name'].toString().trim();
+      } else if (i['item'] is Map) {
+        name = (i['item']['branchName'] ?? i['item']['name'])?.toString().trim() ?? 'Item';
+      }
+
+      final qty = (i['quantity'] is num)
+          ? (i['quantity'] as num).toInt()
+          : (int.tryParse(i['quantity']?.toString() ?? '1') ?? 1);
+      final rawPrice = i['basePrice'] ??
+          i['branchPrice'] ??
+          i['price'] ??
+          (i['item'] is Map ? (i['item']['branchPrice'] ?? i['item']['price']) : null) ??
+          0;
+      final price = num.tryParse(rawPrice.toString()) ?? 0;
+      final total = (i['itemTotal'] is num) ? (i['itemTotal'] as num) : (price * qty);
 
       bytes.addAll(
         generator.row([
@@ -397,10 +411,14 @@ class BluetoothPrinterService {
 
     bytes.addAll(generator.hr(ch: '-'));
 
-    final subTotal = num.tryParse((bill['subTotal'] ?? 0).toString()) ?? 0;
-    final gstRate = bill['gstRate'] ?? 0;
-    final gstAmount = num.tryParse((bill['gstAmount'] ?? 0).toString()) ?? 0;
-    final total = num.tryParse((bill['total'] ?? 0).toString()) ?? 0;
+    final subTotal = num.tryParse((bill['subTotal'] ?? bill['subtotal'] ?? 0).toString()) ?? 0;
+    final gstRate = bill['gstRate'] ?? bill['taxRate'] ?? 0;
+    final gstAmount = num.tryParse((bill['gstAmount'] ?? bill['taxAmount'] ?? 0).toString()) ?? 0;
+    final discountAmount = num.tryParse((bill['discountAmount'] ?? bill['discount'] ?? 0).toString()) ?? 0;
+    var total = num.tryParse((bill['total'] ?? bill['totalAmount'] ?? bill['finalAmount'] ?? 0).toString()) ?? 0;
+    if (total == 0 && subTotal > 0) {
+      total = subTotal + gstAmount - discountAmount;
+    }
 
     bytes.addAll(
       generator.row([
@@ -412,6 +430,19 @@ class BluetoothPrinterService {
         ),
       ]),
     );
+
+    if (discountAmount > 0) {
+      bytes.addAll(
+        generator.row([
+          PosColumn(text: 'Discount:', width: 6),
+          PosColumn(
+            text: '- Rs. ${discountAmount.toStringAsFixed(2)}',
+            width: 6,
+            styles: const PosStyles(align: PosAlign.right),
+          ),
+        ]),
+      );
+    }
 
     if (gstAmount > 0) {
       bytes.addAll(
@@ -512,7 +543,13 @@ class BluetoothPrinterService {
       paperSize: paperSize,
     );
 
-    return await PrintBluetoothThermal.writeBytes(bytes);
+    final success = await PrintBluetoothThermal.writeBytes(bytes);
+    if (success) {
+      debugPrint('🖨️ Direct Bluetooth Bill printed successfully!');
+    } else {
+      debugPrint('❌ Failed writing Bill bytes to Bluetooth printer.');
+    }
+    return success;
   }
 
   /// Print a test receipt to verify connection and paper alignment

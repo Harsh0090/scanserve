@@ -29,6 +29,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
   Map<String, dynamic>? _billPreview;
   String? _selectedPaymentMethod;
   bool _isFinalizingBill = false;
+  bool _isPrintingBill = false;
 
   // Shift table states
   Map<String, dynamic>? _shiftData;
@@ -1194,52 +1195,45 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                         child: Text('Close', style: TextStyle(color: Colors.grey.shade700, fontSize: 13.sp, fontWeight: FontWeight.bold)),
                                       ),
                                     ),
-                                    SizedBox(width: 12.w),
+                                    SizedBox(width: 8.w),
                                     Expanded(
-                                      flex: autoPrintBill ? 1 : 2,
+                                      child: OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          side: const BorderSide(color: Color(0xFFFF5C00), width: 1.5),
+                                          foregroundColor: const Color(0xFFFF5C00),
+                                          backgroundColor: const Color(0xFFFFF5ED),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                          padding: EdgeInsets.symmetric(vertical: 16.h),
+                                        ),
+                                        onPressed: _isPrintingBill ? null : () => _printCurrentBill(setDialogState),
+                                        icon: _isPrintingBill
+                                            ? SizedBox(width: 16.r, height: 16.r, child: const CircularProgressIndicator(color: Color(0xFFFF5C00), strokeWidth: 2))
+                                            : Icon(LucideIcons.printer, size: 16.sp, color: const Color(0xFFFF5C00)),
+                                        label: Text('Print Bill', style: TextStyle(color: const Color(0xFFFF5C00), fontSize: 13.sp, fontWeight: FontWeight.w900)),
+                                      ),
+                                    ),
+                                    SizedBox(width: 8.w),
+                                    Expanded(
                                       child: ElevatedButton.icon(
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: autoPrintBill ? Colors.grey.shade100 : const Color(0xFFFF5C00),
-                                          foregroundColor: autoPrintBill ? Colors.grey.shade800 : Colors.white,
+                                          backgroundColor: const Color(0xFFFF5C00),
+                                          foregroundColor: Colors.white,
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
                                           padding: EdgeInsets.symmetric(vertical: 16.h),
                                           disabledBackgroundColor: Colors.grey.shade300,
-                                          elevation: autoPrintBill ? 0 : 2,
+                                          elevation: 2,
                                         ),
                                         onPressed: (_selectedPaymentMethod == null || _isFinalizingBill) 
                                             ? null 
-                                            : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: false),
+                                            : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: autoPrintBill),
                                         icon: _isFinalizingBill 
                                             ? const SizedBox.shrink()
-                                            : Icon(LucideIcons.receipt, size: 16.sp, color: autoPrintBill ? Colors.grey.shade700 : Colors.white),
+                                            : Icon(LucideIcons.receipt, size: 16.sp, color: Colors.white),
                                         label: _isFinalizingBill 
-                                            ? SizedBox(width: 18.r, height: 18.r, child: CircularProgressIndicator(color: autoPrintBill ? Colors.grey : Colors.white, strokeWidth: 2))
+                                            ? SizedBox(width: 18.r, height: 18.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                                             : Text('Mark Paid', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w900)),
                                       ),
                                     ),
-                                    if (autoPrintBill) ...[
-                                      SizedBox(width: 12.w),
-                                      Expanded(
-                                        child: ElevatedButton.icon(
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(0xFFFF5C00),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                                            padding: EdgeInsets.symmetric(vertical: 16.h),
-                                            disabledBackgroundColor: Colors.grey.shade300,
-                                            elevation: 2,
-                                          ),
-                                          onPressed: (_selectedPaymentMethod == null || _isFinalizingBill) 
-                                              ? null 
-                                              : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: true),
-                                          icon: _isFinalizingBill 
-                                              ? const SizedBox.shrink()
-                                              : Icon(LucideIcons.printer, size: 16.sp, color: Colors.white),
-                                          label: _isFinalizingBill 
-                                              ? SizedBox(width: 18.r, height: 18.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                              : Text('Print Bill', style: TextStyle(color: Colors.white, fontSize: 13.sp, fontWeight: FontWeight.w900)),
-                                        ),
-                                      ),
-                                    ],
                                   ],
                                 );
                               }
@@ -1374,10 +1368,47 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
       );
       
       if (shouldPrint) {
-        await apiFetch(
-          '/api/admin/orders/$orderId/print-bill',
-          method: 'PATCH',
-        );
+        try {
+          Map<String, dynamic>? billToPrint;
+          try {
+            final res = await apiFetch(
+              '/api/admin/orders/$orderId/print-bill',
+              method: 'PATCH',
+            );
+            if (res is Map && res['bill'] is Map) {
+              billToPrint = Map<String, dynamic>.from(res['bill']);
+            }
+          } catch (e) {
+            debugPrint("print-bill API error: $e");
+          }
+
+          billToPrint ??= (_billPreview?['bill'] is Map)
+              ? Map<String, dynamic>.from(_billPreview!['bill'])
+              : null;
+
+          if (billToPrint != null) {
+            final user = ref.read(authProvider).user;
+            final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+            final tableNum = _billPreview?['table']?['tableName']?.toString() ?? _billPreview?['bill']?['tableNumber']?.toString();
+            if (restName != null && billToPrint['restaurantName'] == null) {
+              billToPrint['restaurantName'] = restName.toString();
+            }
+            if (tableNum != null && billToPrint['tableNumber'] == null) {
+              billToPrint['tableNumber'] = tableNum;
+            }
+            if (billToPrint['orderId'] == null) {
+              billToPrint['orderId'] = orderId;
+            }
+            if (discInfo['discountAmount'] > 0) {
+              billToPrint['discountAmount'] = discInfo['discountAmount'];
+              billToPrint['total'] = discInfo['finalAmount'];
+            }
+            final kotService = ref.read(kotPrintServiceProvider);
+            await kotService.printBill(bill: billToPrint);
+          }
+        } catch (printErr) {
+          debugPrint("Failed to print bill during finalize: $printErr");
+        }
       }
       
       Navigator.pop(dialogContext);
@@ -1412,6 +1443,86 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
       setDialogState(() {
         _isFinalizingBill = false;
       });
+    }
+  }
+
+  Future<void> _printCurrentBill(StateSetter? setDialogState) async {
+    final orderId = _billPreview?['table']?['currentOrderId'];
+    if (orderId == null) return;
+
+    if (setDialogState != null) {
+      setDialogState(() => _isPrintingBill = true);
+    } else {
+      setState(() => _isPrintingBill = true);
+    }
+
+    try {
+      Map<String, dynamic>? billToPrint;
+      try {
+        final res = await apiFetch(
+          '/api/admin/orders/$orderId/print-bill',
+          method: 'PATCH',
+        );
+        if (res is Map && res['bill'] is Map) {
+          billToPrint = Map<String, dynamic>.from(res['bill']);
+        }
+      } catch (e) {
+        debugPrint("print-bill API error: $e");
+      }
+
+      billToPrint ??= (_billPreview?['bill'] is Map)
+          ? Map<String, dynamic>.from(_billPreview!['bill'])
+          : null;
+
+      if (billToPrint == null) {
+        throw Exception("No bill data available");
+      }
+
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+      final tableNum = _billPreview?['table']?['tableName']?.toString() ?? _billPreview?['bill']?['tableNumber']?.toString();
+      if (restName != null && billToPrint['restaurantName'] == null) {
+        billToPrint['restaurantName'] = restName.toString();
+      }
+      if (tableNum != null && billToPrint['tableNumber'] == null) {
+        billToPrint['tableNumber'] = tableNum;
+      }
+      if (billToPrint['orderId'] == null) {
+        billToPrint['orderId'] = orderId;
+      }
+
+      final discInfo = _getDiscountedBill();
+      if (discInfo['discountAmount'] > 0) {
+        billToPrint['discountAmount'] = discInfo['discountAmount'];
+        billToPrint['total'] = discInfo['finalAmount'];
+      }
+
+      final kotService = ref.read(kotPrintServiceProvider);
+      await kotService.printBill(bill: billToPrint);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Bill sent to printer'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Printer Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (setDialogState != null) {
+        setDialogState(() => _isPrintingBill = false);
+      } else {
+        if (mounted) setState(() => _isPrintingBill = false);
+      }
     }
   }
 

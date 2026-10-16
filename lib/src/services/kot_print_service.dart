@@ -166,9 +166,17 @@ class KotPrintService {
     }
 
     try {
+      final Map<String, dynamic> postData = {
+        'bill': bill,
+      };
+      final orderId = bill['orderId'] ?? bill['_id'];
+      if (orderId != null) {
+        postData['orderId'] = orderId.toString();
+      }
+
       final response = await _dio.post(
         '/api/print/bill',
-        data: {'bill': bill},
+        data: postData,
       );
 
       if (response.statusCode != 200) {

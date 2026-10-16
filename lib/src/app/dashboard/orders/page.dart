@@ -853,8 +853,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   }
 
   Future<void> _printOrderBill(dynamic order) async {
-    final orderId = order['_id']?.toString();
-    if (orderId == null) return;
+    final orderId = (order is Map ? order['_id'] : order)?.toString();
+    if (orderId == null || orderId.isEmpty) return;
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -867,14 +867,59 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     }
 
     try {
-      // Step 1: Fetch bill data from backend
-      final data = await apiFetch('/api/admin/orders/$orderId/bill-preview', method: 'GET');
+      // Step 1: Fetch bill data from backend (try print-bill or bill-preview)
+      Map<String, dynamic>? bill;
+      try {
+        final data = await apiFetch('/api/admin/orders/$orderId/print-bill', method: 'PATCH');
+        if (data != null && data['bill'] != null) {
+          bill = Map<String, dynamic>.from(data['bill'] as Map);
+        }
+      } catch (e) {
+        debugPrint("print-bill PATCH failed: $e, trying bill-preview...");
+      }
 
-      if (data == null || data['bill'] == null) {
+      if (bill == null) {
+        try {
+          final data = await apiFetch('/api/admin/orders/$orderId/bill-preview', method: 'GET');
+          if (data != null && data['bill'] != null) {
+            bill = Map<String, dynamic>.from(data['bill'] as Map);
+          }
+        } catch (e) {
+          debugPrint("bill-preview GET failed: $e");
+        }
+      }
+
+      if (bill == null && order is Map) {
+        // Fallback: build bill directly from order object so printing never fails
+        bill = {
+          '_id': orderId,
+          'orderId': orderId,
+          'tableNumber': (order['tableNumber'] ?? order['tableName'])?.toString(),
+          'items': order['items'],
+          'subTotal': order['subTotal'] ?? order['totalAmount'] ?? order['total'] ?? 0,
+          'gstRate': order['gstRate'] ?? 0,
+          'gstAmount': order['gstAmount'] ?? 0,
+          'total': order['total'] ?? order['totalAmount'] ?? order['finalAmount'] ?? 0,
+        };
+      }
+
+      if (bill == null) {
         throw Exception('Invalid bill response from server');
       }
 
-      final bill = Map<String, dynamic>.from(data['bill'] as Map);
+      // Populate restaurantName & tableNumber if missing
+      final user = ref.read(authProvider).user;
+      final restName = user?['restaurants']?[0]?['name'] ?? user?['data']?['restaurants']?[0]?['name'] ?? user?['name'];
+      if (restName != null && bill['restaurantName'] == null) {
+        bill['restaurantName'] = restName.toString();
+      }
+      final tableNum = (order is Map ? (order['tableNumber'] ?? order['tableName']) : null)?.toString();
+      if (tableNum != null && bill['tableNumber'] == null) {
+        bill['tableNumber'] = tableNum;
+      }
+      if (bill['orderId'] == null) {
+        bill['orderId'] = orderId;
+      }
 
       // Step 2: Route through KotPrintService (Bluetooth → backend fallback)
       final kotService = ref.read(kotPrintServiceProvider);
