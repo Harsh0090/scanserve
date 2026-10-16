@@ -26,10 +26,12 @@ class _MenuPageState extends ConsumerState<MenuPage> {
   late TextEditingController _editNameController;
   late TextEditingController _editPriceController;
   late TextEditingController _editDescriptionController;
+  late TextEditingController _editMakingCostController;
 
   String _newCategory = '';
   String _itemName = '';
   String _itemPrice = '';
+  String _itemMakingCost = '';
   String _itemCategoryId = '';
   String _itemDescription = '';
   bool _skipKitchen = false; // Kitchen alert toggle for new item
@@ -38,6 +40,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
   String _editName = '';
   String _editPrice = '';
   String _editDescription = '';
+  String _editMakingCost = '';
 
   // Inventory & Recipe Builder states
   List<dynamic> _inventoryItems = [];
@@ -54,6 +57,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
     _editNameController = TextEditingController();
     _editPriceController = TextEditingController();
     _editDescriptionController = TextEditingController();
+    _editMakingCostController = TextEditingController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadMenu();
       _loadInventory();
@@ -66,6 +70,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
     _editNameController.dispose();
     _editPriceController.dispose();
     _editDescriptionController.dispose();
+    _editMakingCostController.dispose();
     super.dispose();
   }
 
@@ -316,6 +321,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
         data: {
           'name': _itemName,
           'basePrice': num.tryParse(_itemPrice) ?? 0,
+          'makingCost': num.tryParse(_itemMakingCost) ?? 0,
           'categories': _itemCategoryId,
           'description': _itemDescription,
           'skipKitchen': _skipKitchen,
@@ -325,6 +331,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
       setState(() {
         _itemName = '';
         _itemPrice = '';
+        _itemMakingCost = '';
         _itemCategoryId = '';
         _itemDescription = '';
         _skipKitchen = false;
@@ -399,6 +406,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
         data: {
           'name': _editName,
           'basePrice': num.tryParse(_editPrice) ?? 0,
+          'makingCost': num.tryParse(_editMakingCost) ?? 0,
           'description': _editDescription,
         },
       );
@@ -1142,7 +1150,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                                                 ? 2
                                                 : 3);
                                     final double itemHeight =
-                                        crossAxisCount == 1 ? 200.0 : 215.0;
+                                        crossAxisCount == 1 ? 210.0 : 225.0;
                                     final double imgWidth =
                                         constraints.maxWidth < 450
                                             ? 100.0
@@ -1400,77 +1408,191 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                                                           ),
                                                           SizedBox(width: 6.w),
                                                           if (!isEditing)
-                                                            Text(
-                                                              '₹${i['price'] ?? i['basePrice'] ?? 0}',
-                                                              style: TextStyle(
-                                                                fontSize: 14.sp,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w900,
-                                                                color: isAvailable
-                                                                    ? const Color(
-                                                                        0xFF0F172A)
-                                                                    : Colors
-                                                                        .grey,
-                                                              ),
+                                                            Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .end,
+                                                              mainAxisSize:
+                                                                  MainAxisSize
+                                                                      .min,
+                                                              children: [
+                                                                Text(
+                                                                  '₹${i['price'] ?? i['basePrice'] ?? 0}',
+                                                                  style: TextStyle(
+                                                                    fontSize:
+                                                                        14.sp,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w900,
+                                                                    color: isAvailable
+                                                                        ? const Color(
+                                                                            0xFF0F172A)
+                                                                        : Colors
+                                                                            .grey,
+                                                                  ),
+                                                                ),
+                                                                if ((num.tryParse(i['makingCost']?.toString() ?? '0') ?? 0) > 0)
+                                                                  Builder(
+                                                                    builder: (context) {
+                                                                      final sell = num.tryParse((i['price'] ?? i['basePrice'] ?? 0).toString()) ?? 0;
+                                                                      final cost = num.tryParse(i['makingCost']?.toString() ?? '0') ?? 0;
+                                                                      final profit = sell - cost;
+                                                                      final pct = sell > 0 ? ((profit / sell) * 100).toStringAsFixed(0) : '0';
+                                                                      final profitStr = (profit == profit.roundToDouble()) ? profit.toInt().toString() : profit.toStringAsFixed(2);
+                                                                      final costStr = (cost == cost.roundToDouble()) ? cost.toInt().toString() : cost.toStringAsFixed(2);
+                                                                      final isPositive = profit >= 0;
+                                                                      return Text(
+                                                                        'Cost ₹$costStr · Profit ₹$profitStr ($pct%)',
+                                                                        style: TextStyle(
+                                                                          fontSize: 7.5.sp,
+                                                                          fontWeight: FontWeight.w900,
+                                                                          color: isPositive ? const Color(0xFF059669) : const Color(0xFFEF4444),
+                                                                        ),
+                                                                      );
+                                                                    },
+                                                                  ),
+                                                              ],
                                                             )
                                                           else
-                                                            SizedBox(
-                                                              width: 70.w,
-                                                              child: Row(
-                                                                mainAxisSize:
-                                                                    MainAxisSize
-                                                                        .min,
-                                                                children: [
-                                                                  Text(
-                                                                    '₹',
-                                                                    style: TextStyle(
-                                                                        fontSize:
-                                                                            13.sp,
-                                                                        fontWeight:
-                                                                            FontWeight.w900),
-                                                                  ),
-                                                                  SizedBox(
-                                                                      width:
-                                                                          2.w),
-                                                                  Expanded(
-                                                                    child:
-                                                                        TextField(
-                                                                      controller:
-                                                                          _editPriceController,
-                                                                      onChanged: (v) =>
-                                                                          _editPrice =
-                                                                              v,
-                                                                      keyboardType:
-                                                                          TextInputType
-                                                                              .number,
-                                                                      style: TextStyle(
+                                                            Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .end,
+                                                              mainAxisSize:
+                                                                  MainAxisSize
+                                                                      .min,
+                                                              children: [
+                                                                SizedBox(
+                                                                  width: 75.w,
+                                                                  child: Row(
+                                                                    mainAxisSize:
+                                                                        MainAxisSize
+                                                                            .min,
+                                                                    children: [
+                                                                      Text(
+                                                                        '₹',
+                                                                        style: TextStyle(
                                                                           fontSize:
                                                                               13.sp,
                                                                           fontWeight:
-                                                                              FontWeight.w900),
-                                                                      decoration:
-                                                                          InputDecoration(
-                                                                        isDense:
-                                                                            true,
-                                                                        contentPadding:
-                                                                            EdgeInsets.symmetric(vertical: 2.h),
-                                                                        border:
-                                                                            UnderlineInputBorder(
-                                                                          borderSide:
-                                                                              BorderSide(
-                                                                            color:
-                                                                                const Color(0xFFFF4D00),
-                                                                            width:
-                                                                                1.w,
+                                                                              FontWeight.w900,
+                                                                        ),
+                                                                      ),
+                                                                      SizedBox(
+                                                                          width:
+                                                                              2.w),
+                                                                      Expanded(
+                                                                        child:
+                                                                            TextField(
+                                                                          controller:
+                                                                              _editPriceController,
+                                                                          onChanged: (v) =>
+                                                                              _editPrice =
+                                                                                  v,
+                                                                          keyboardType:
+                                                                              TextInputType
+                                                                                  .number,
+                                                                          style: TextStyle(
+                                                                            fontSize:
+                                                                                13.sp,
+                                                                            fontWeight:
+                                                                                FontWeight.w900,
+                                                                          ),
+                                                                          decoration:
+                                                                              InputDecoration(
+                                                                            isDense:
+                                                                                true,
+                                                                            contentPadding:
+                                                                                EdgeInsets.symmetric(vertical: 2.h),
+                                                                            border:
+                                                                                UnderlineInputBorder(
+                                                                              borderSide:
+                                                                                  BorderSide(
+                                                                                color:
+                                                                                    const Color(0xFFFF4D00),
+                                                                                width:
+                                                                                    1.w,
+                                                                              ),
+                                                                            ),
                                                                           ),
                                                                         ),
                                                                       ),
-                                                                    ),
+                                                                    ],
                                                                   ),
-                                                                ],
-                                                              ),
-                                                            ),
+                                                                ),
+                                                                SizedBox(height: 2.h),
+                                                                SizedBox(
+                                                                  width: 75.w,
+                                                                  child: Row(
+                                                                    mainAxisSize:
+                                                                        MainAxisSize
+                                                                            .min,
+                                                                    children: [
+                                                                      Text(
+                                                                        'Cost ₹',
+                                                                        style: TextStyle(
+                                                                          fontSize:
+                                                                              8.sp,
+                                                                          fontWeight:
+                                                                              FontWeight.w900,
+                                                                          color: Colors.grey.shade500,
+                                                                        ),
+                                                                      ),
+                                                                      SizedBox(
+                                                                          width:
+                                                                              2.w),
+                                                                      Expanded(
+                                                                        child:
+                                                                            TextField(
+                                                                          controller:
+                                                                              _editMakingCostController,
+                                                                          onChanged: (v) =>
+                                                                              _editMakingCost =
+                                                                                  v,
+                                                                          keyboardType:
+                                                                              TextInputType
+                                                                                  .number,
+                                                                          style: TextStyle(
+                                                                            fontSize:
+                                                                                9.sp,
+                                                                            fontWeight:
+                                                                                FontWeight.w900,
+                                                                            color: const Color(0xFF334155),
+                                                                          ),
+                                                                          decoration:
+                                                                              InputDecoration(
+                                                                            isDense:
+                                                                                true,
+                                                                            contentPadding:
+                                                                                EdgeInsets.symmetric(vertical: 2.h),
+                                                                            border:
+                                                                                UnderlineInputBorder(
+                                                                              borderSide:
+                                                                                  BorderSide(
+                                                                                color:
+                                                                                    Colors.grey.shade300,
+                                                                                width:
+                                                                                    1.w,
+                                                                              ),
+                                                                            ),
+                                                                            focusedBorder:
+                                                                                UnderlineInputBorder(
+                                                                              borderSide:
+                                                                                  BorderSide(
+                                                                                color:
+                                                                                    const Color(0xFFFF4D00),
+                                                                                width:
+                                                                                    1.w,
+                                                                              ),
+                                                                            ),
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            )
                                                         ],
                                                       ),
                                                       SizedBox(height: 4.h),
@@ -1800,6 +1922,8 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                                                                             (i['price'] ?? i['basePrice'] ?? 0).toString();
                                                                         _editDescription =
                                                                             i['description'] ?? '';
+                                                                        _editMakingCost =
+                                                                            (i['makingCost'] ?? 0).toString();
                                                                         _editNameController
                                                                                 .text =
                                                                             _editName;
@@ -1809,6 +1933,9 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                                                                         _editDescriptionController
                                                                                 .text =
                                                                             _editDescription;
+                                                                        _editMakingCostController
+                                                                                .text =
+                                                                            _editMakingCost;
                                                                       });
                                                                     },
                                                                     borderRadius:
@@ -2379,7 +2506,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                     SizedBox(height: 8.h),
                     TextField(
                       keyboardType: TextInputType.number,
-                      onChanged: (v) => _itemPrice = v,
+                      onChanged: (v) => setState(() => _itemPrice = v),
                       decoration: InputDecoration(
                         hintText: '0.00',
                         filled: true,
@@ -2394,6 +2521,60 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    SizedBox(height: 16.h),
+                    Text(
+                      'MAKING COST (₹)',
+                      style: TextStyle(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.grey,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    SizedBox(height: 8.h),
+                    TextField(
+                      keyboardType: TextInputType.number,
+                      onChanged: (v) => setState(() => _itemMakingCost = v),
+                      decoration: InputDecoration(
+                        hintText: 'e.g. 30',
+                        filled: true,
+                        fillColor: Colors.grey.shade50,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16.r),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      style: TextStyle(
+                        fontSize: 13.sp,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if ((num.tryParse(_itemPrice) ?? 0) > 0 &&
+                        (num.tryParse(_itemMakingCost) ?? 0) > 0) ...[
+                      SizedBox(height: 6.h),
+                      Builder(
+                        builder: (context) {
+                          final priceNum = num.tryParse(_itemPrice) ?? 0;
+                          final costNum = num.tryParse(_itemMakingCost) ?? 0;
+                          final profit = priceNum - costNum;
+                          final pct = ((profit / priceNum) * 100).toStringAsFixed(0);
+                          final isProfit = profit >= 0;
+                          return Padding(
+                            padding: EdgeInsets.only(left: 4.w),
+                            child: Text(
+                              'Profit ₹${profit.toStringAsFixed(2)} ($pct%)',
+                              style: TextStyle(
+                                fontSize: 10.sp,
+                                fontWeight: FontWeight.bold,
+                                color: isProfit
+                                    ? const Color(0xFF059669)
+                                    : const Color(0xFFEF4444),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                     SizedBox(height: 16.h),
                     Text(
                       'SET CATEGORY',
