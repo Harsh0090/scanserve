@@ -48,9 +48,23 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     return _noteControllers[id]!;
   }
 
-  String _formatTime(dynamic dateStr) {
-    if (dateStr == null) return '';
-    final dt = DateTime.tryParse(dateStr.toString())?.toLocal();
+  String _formatTime(dynamic dateVal) {
+    if (dateVal == null) return '';
+    DateTime? dt;
+    if (dateVal is DateTime) {
+      dt = dateVal.toLocal();
+    } else if (dateVal is int) {
+      dt = DateTime.fromMillisecondsSinceEpoch(dateVal).toLocal();
+    } else {
+      final str = dateVal.toString().trim();
+      if (str.isEmpty) return '';
+      final intVal = int.tryParse(str);
+      if (intVal != null && str.length >= 10) {
+        dt = DateTime.fromMillisecondsSinceEpoch(str.length == 10 ? intVal * 1000 : intVal).toLocal();
+      } else {
+        dt = DateTime.tryParse(str)?.toLocal();
+      }
+    }
     if (dt == null) return '';
     final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
     final minute = dt.minute.toString().padLeft(2, '0');
@@ -164,10 +178,19 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     try {
       final res = await apiFetch('/api/admin/orders/live?t=${DateTime.now().millisecondsSinceEpoch}');
       if (res is List) {
-        final order = res.firstWhere((o) => o['_id'] == orderId, orElse: () => null);
+        final order = res.firstWhere(
+          (o) => (o is Map && (o['_id'] ?? '').toString() == orderId.toString()),
+          orElse: () => null,
+        );
         if (order != null) {
-          _loadExistingItemsFromOrder(order);
+          _loadExistingItemsFromOrder(order is Map<String, dynamic> ? order : Map<String, dynamic>.from(order as Map));
+          return;
         }
+      }
+      final singleRes = await apiFetch('/api/admin/orders/$orderId');
+      if (singleRes is Map) {
+        final orderData = singleRes['order'] is Map ? singleRes['order'] : singleRes;
+        _loadExistingItemsFromOrder(Map<String, dynamic>.from(orderData as Map));
       }
     } catch (e) {
       debugPrint('Failed to load live order: $e');
@@ -178,6 +201,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     final items = order['items'] as List<dynamic>? ?? [];
     Map<String, dynamic> map = {};
     Map<String, int> origQty = {};
+    final orderCreatedAt = order['createdAt'] ?? order['orderTime'] ?? order['date'];
     for (var i in items) {
       final id = (i['_id'] ?? '').toString();
       final quantity = i['quantity'] is int ? i['quantity'] as int : (i['quantity'] as double?)?.toInt() ?? 0;
@@ -190,6 +214,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
               '')
           .toString()
           .trim();
+      final itemTime = i['addedAt'] ?? i['createdAt'] ?? orderCreatedAt;
       map[id] = {
         '_id': id,
         'itemRefId': i['item']?['_id'],
@@ -199,7 +224,8 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         'note': existingNote,
         'notes': existingNote,
         'instruction': existingNote,
-        'createdAt': i['createdAt'],
+        'addedAt': itemTime,
+        'createdAt': itemTime,
       };
       origQty[id] = quantity;
     }
@@ -1499,31 +1525,42 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     SizedBox(height: 2.h),
-                    Row(
-                      children: [
-                        Text(
-                          '₹${item['basePrice']} each',
-                          style: TextStyle(
-                            fontSize: 10.sp,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                        if (isExisting && item['createdAt'] != null) ...[
-                          SizedBox(width: 6.w),
-                          Icon(LucideIcons.clock, size: 9.sp, color: Colors.orange.shade700),
-                          SizedBox(width: 3.w),
-                          Text(
-                            _formatTime(item['createdAt']),
-                            style: TextStyle(
-                              fontSize: 9.sp,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.orange.shade700,
-                            ),
-                          ),
-                        ],
-                      ],
+                    Text(
+                      '₹${item['basePrice']} each',
+                      style: TextStyle(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade600,
+                      ),
                     ),
+                    if (isExisting) ...[
+                      Builder(builder: (context) {
+                        final timeStr = _formatTime(item['addedAt'] ?? item['createdAt']);
+                        if (timeStr.isEmpty) return const SizedBox.shrink();
+                        return Padding(
+                          padding: EdgeInsets.only(top: 2.h),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                LucideIcons.clock,
+                                size: 10.sp,
+                                color: const Color(0xFF94A3B8),
+                              ),
+                              SizedBox(width: 4.w),
+                              Text(
+                                timeStr,
+                                style: TextStyle(
+                                  fontSize: 10.sp,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFF64748B),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
                   ],
                 ),
               ),
