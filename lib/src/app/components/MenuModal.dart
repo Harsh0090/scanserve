@@ -38,6 +38,25 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   String _selectedCategory = 'All';
   String _searchQuery = "";
   late TextEditingController _searchController;
+  final Map<String, TextEditingController> _noteControllers = {};
+  final Map<String, String> _notesByItemId = {};
+
+  TextEditingController _getNoteController(String id, String initial) {
+    if (!_noteControllers.containsKey(id)) {
+      _noteControllers[id] = TextEditingController(text: initial);
+    }
+    return _noteControllers[id]!;
+  }
+
+  String _formatTime(dynamic dateStr) {
+    if (dateStr == null) return '';
+    final dt = DateTime.tryParse(dateStr.toString())?.toLocal();
+    if (dt == null) return '';
+    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final amPm = dt.hour >= 12 ? 'pm' : 'am';
+    return '$hour:$minute $amPm';
+  }
 
   Map<String, dynamic> _cart = {};
   Map<String, dynamic> _existingItems = {};
@@ -78,6 +97,10 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   @override
   void dispose() {
     _searchController.dispose();
+    for (var c in _noteControllers.values) {
+      c.dispose();
+    }
+    _notesByItemId.clear();
     super.dispose();
   }
 
@@ -156,14 +179,27 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     Map<String, dynamic> map = {};
     Map<String, int> origQty = {};
     for (var i in items) {
-      final id = i['_id'] as String;
+      final id = (i['_id'] ?? '').toString();
       final quantity = i['quantity'] is int ? i['quantity'] as int : (i['quantity'] as double?)?.toInt() ?? 0;
+      final existingNote = (i['note'] ??
+              i['notes'] ??
+              i['instruction'] ??
+              i['instructions'] ??
+              i['specialInstructions'] ??
+              (i['item'] is Map ? (i['item']['note'] ?? i['item']['notes'] ?? i['item']['instruction']) : null) ??
+              '')
+          .toString()
+          .trim();
       map[id] = {
         '_id': id,
         'itemRefId': i['item']?['_id'],
         'name': i['item']?['branchName'] ?? i['name'] ?? '',
         'basePrice': (i['item']?['branchPrice'] ?? i['basePrice'] ?? 0).toDouble(),
         'quantity': quantity,
+        'note': existingNote,
+        'notes': existingNote,
+        'instruction': existingNote,
+        'createdAt': i['createdAt'],
       };
       origQty[id] = quantity;
     }
@@ -175,13 +211,27 @@ class _MenuModalState extends ConsumerState<MenuModal> {
 
   void _updateQuantity(Map<String, dynamic> item, int delta) {
     setState(() {
-      final id = item['_id'] as String;
+      final id = (item['_id'] ?? '').toString();
       int qty = _cart.containsKey(id) ? (_cart[id]['quantity'] as int) : 0;
       int nextQty = qty + delta;
       if (nextQty <= 0) {
         _cart.remove(id);
+        _noteControllers[id]?.dispose();
+        _noteControllers.remove(id);
+        _notesByItemId.remove(id);
       } else {
-        _cart[id] = {...item, 'quantity': nextQty};
+        final currentNote = _notesByItemId[id] ??
+            (_noteControllers[id]?.text.trim().isNotEmpty == true
+                ? _noteControllers[id]!.text.trim()
+                : (_cart[id]?['note'] ?? '').toString());
+        _cart[id] = {
+          ...item,
+          '_id': id,
+          'quantity': nextQty,
+          'note': currentNote,
+          'notes': currentNote,
+          'instruction': currentNote,
+        };
       }
     });
   }
@@ -257,6 +307,15 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Your cart is empty")));
         return;
       }
+      for (final entry in _cart.entries) {
+        final idStr = entry.key;
+        final note = _notesByItemId[idStr] ?? _noteControllers[idStr]?.text.trim() ?? '';
+        if (note.isNotEmpty) {
+          entry.value['note'] = note;
+          entry.value['notes'] = note;
+          entry.value['instruction'] = note;
+        }
+      }
       widget.onCartConfirmed!(_cart.values.toList());
       return;
     }
@@ -292,10 +351,21 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         }).toList();
 
         // New cart items being appended
-        final newCartItems = _cart.values.map((i) => {
-          'itemId': i['_id'],
-          'quantity': i['quantity'],
-          'isUpsell': false,
+        final newCartItems = _cart.values.map((i) {
+          final idStr = (i['_id'] ?? '').toString();
+          final note = _notesByItemId[idStr]?.isNotEmpty == true
+              ? _notesByItemId[idStr]!
+              : (_noteControllers[idStr]?.text.trim().isNotEmpty == true
+                  ? _noteControllers[idStr]!.text.trim()
+                  : ((i['note'] ?? i['notes'] ?? i['instruction'] ?? '').toString().trim()));
+          return {
+            'itemId': idStr,
+            'quantity': i['quantity'],
+            'isUpsell': false,
+            'note': note,
+            'notes': note,
+            'instruction': note,
+          };
         }).toList();
 
         // Build KOT items: only the delta (increased units)
@@ -308,6 +378,8 @@ class _MenuModalState extends ConsumerState<MenuModal> {
               'item': {'branchName': line['name']},
               'quantity': delta,
               'skipKitchen': false,
+              if (line['note'] != null && line['note'].toString().trim().isNotEmpty)
+                'note': line['note'].toString().trim(),
             });
           }
         }
@@ -327,6 +399,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           updatedOrder = await apiFetch('/api/orders/append-items', method: 'PUT', data: {
             'orderId': orderId,
             'items': newCartItems,
+            'placedBy': 'STAFF',
             'skipAutoPrint': !shouldPrintKOT,
           });
         }
@@ -357,11 +430,21 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         // ── KOT for newly appended cart items ──
         if (shouldPrintKOT && updatedOrder != null && _cart.isNotEmpty) {
           try {
-            final newOrderItems = _cart.values.map((i) => {
-              'item': {'branchName': i['name'] ?? ''},
-              'name': i['name'] ?? '',
-              'quantity': i['quantity'],
-              'skipKitchen': false,
+            final newOrderItems = _cart.values.map((i) {
+              final idStr = (i['_id'] ?? '').toString();
+              final note = _notesByItemId[idStr]?.isNotEmpty == true
+                  ? _notesByItemId[idStr]!
+                  : (_noteControllers[idStr]?.text.trim().isNotEmpty == true
+                      ? _noteControllers[idStr]!.text.trim()
+                      : ((i['note'] ?? i['notes'] ?? i['instruction'] ?? '').toString().trim()));
+              return {
+                'item': {'branchName': i['name'] ?? ''},
+                'name': i['name'] ?? '',
+                'quantity': i['quantity'],
+                'skipKitchen': false,
+                if (note.isNotEmpty) 'note': note,
+                if (note.isNotEmpty) 'instruction': note,
+              };
             }).toList();
             final kotService = ref.read(kotPrintServiceProvider);
             await kotService.printKOT(
@@ -377,10 +460,19 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         }
 
         if (mounted) {
+          if (widget.onOrderPlaced != null && updatedOrder != null) {
+            final parsedOrder = updatedOrder is Map
+                ? (updatedOrder['data'] ?? updatedOrder['order'] ?? updatedOrder)
+                : updatedOrder;
+            widget.onOrderPlaced!(parsedOrder);
+          }
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Order updated successfully!'), backgroundColor: Colors.green),
           );
-          setState(() => _cart = {});
+          setState(() {
+            _cart = {};
+            _notesByItemId.clear();
+          });
           Future.delayed(const Duration(milliseconds: 300), widget.onClose);
         }
         return;
@@ -394,10 +486,21 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       }
 
       final Map<String, dynamic> payload = {
-        'items': _cart.values.map((i) => {
-          'itemId': i['_id'],
-          'quantity': i['quantity'],
-          'isUpsell': false,
+        'items': _cart.values.map((i) {
+          final idStr = (i['_id'] ?? '').toString();
+          final note = _notesByItemId[idStr]?.isNotEmpty == true
+              ? _notesByItemId[idStr]!
+              : (_noteControllers[idStr]?.text.trim().isNotEmpty == true
+                  ? _noteControllers[idStr]!.text.trim()
+                  : ((i['note'] ?? i['notes'] ?? i['instruction'] ?? '').toString().trim()));
+          return {
+            'itemId': idStr,
+            'quantity': i['quantity'],
+            'isUpsell': false,
+            'note': note,
+            'notes': note,
+            'instruction': note,
+          };
         }).toList(),
         'placedBy': 'STAFF',
         'skipAutoPrint': !shouldPrintKOT,
@@ -1341,118 +1444,225 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     );
   }
 
-  Widget _buildCartLine(Map<String, dynamic> item, bool isExisting) {
+  Widget _buildCartLine(dynamic itemRaw, bool isExisting) {
+    final Map<String, dynamic> item = itemRaw is Map
+        ? Map<String, dynamic>.from(itemRaw)
+        : <String, dynamic>{};
+    final String itemId = (item['_id'] ?? '').toString();
+    final String note = isExisting
+        ? (item['note'] ?? item['notes'] ?? item['instruction'] ?? '').toString()
+        : (_notesByItemId[itemId] ??
+            (_noteControllers[itemId]?.text.trim().isNotEmpty == true
+                ? _noteControllers[itemId]!.text.trim()
+                : (_cart[itemId]?['note'] ?? '').toString()));
+
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 14.h),
-      color: isExisting ? Colors.transparent : Colors.green.shade50.withValues(alpha: 0.4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      color: isExisting ? Colors.transparent : Colors.green.shade50.withValues(alpha: 0.3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (!isExisting)
-                  Container(
-                    margin: EdgeInsets.only(bottom: 4.h),
-                    padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade100,
-                      borderRadius: BorderRadius.circular(4.r),
-                    ),
-                    child: Text(
-                      'NEW',
-                      style: TextStyle(
-                        fontSize: 8.sp,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.green.shade700,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                Text(
-                  (item['name'] ?? '').toString().toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 12.sp,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.black87,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                SizedBox(height: 2.h),
-                Text(
-                  '₹${item['basePrice']} each',
-                  style: TextStyle(
-                    fontSize: 10.sp,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-          ),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: isExisting ? Colors.grey.shade100 : Colors.black87,
-                  borderRadius: BorderRadius.circular(8.r),
-                ),
-                padding: EdgeInsets.all(4.r),
-                child: Row(
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    GestureDetector(
-                      onTap: () => isExisting ? _updateExistingQuantity(item['_id'], -1) : _updateQuantity(item, -1),
-                      child: Padding(
-                        padding: EdgeInsets.all(4.r),
-                        child: Icon(
-                          LucideIcons.minus,
-                          size: 13.sp,
-                          color: isExisting ? Colors.grey.shade600 : Colors.white,
+                    if (!isExisting)
+                      Container(
+                        margin: EdgeInsets.only(bottom: 4.h),
+                        padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade100,
+                          borderRadius: BorderRadius.circular(4.r),
+                        ),
+                        child: Text(
+                          'NEW',
+                          style: TextStyle(
+                            fontSize: 8.sp,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.green.shade700,
+                            letterSpacing: 0.5,
+                          ),
                         ),
                       ),
-                    ),
-                    SizedBox(width: 4.w),
                     Text(
-                      '${item['quantity']}',
+                      (item['name'] ?? '').toString().toUpperCase(),
                       style: TextStyle(
-                        fontSize: 14.sp,
+                        fontSize: 12.sp,
                         fontWeight: FontWeight.w900,
-                        color: isExisting ? Colors.black87 : Colors.white,
+                        color: Colors.black87,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    SizedBox(width: 4.w),
-                    GestureDetector(
-                      onTap: () => isExisting ? _updateExistingQuantity(item['_id'], 1) : _updateQuantity(item, 1),
-                      child: Padding(
-                        padding: EdgeInsets.all(4.r),
-                        child: Icon(
-                          LucideIcons.plus,
-                          size: 13.sp,
-                          color: isExisting ? Colors.grey.shade600 : Colors.white,
+                    SizedBox(height: 2.h),
+                    Row(
+                      children: [
+                        Text(
+                          '₹${item['basePrice']} each',
+                          style: TextStyle(
+                            fontSize: 10.sp,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey.shade600,
+                          ),
                         ),
-                      ),
+                        if (isExisting && item['createdAt'] != null) ...[
+                          SizedBox(width: 6.w),
+                          Icon(LucideIcons.clock, size: 9.sp, color: Colors.orange.shade700),
+                          SizedBox(width: 3.w),
+                          Text(
+                            _formatTime(item['createdAt']),
+                            style: TextStyle(
+                              fontSize: 9.sp,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.orange.shade700,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
               ),
-              if (isExisting) ...[
-                SizedBox(width: 8.w),
-                GestureDetector(
-                  onTap: () => _removeExistingLine(item['_id']),
-                  child: Padding(
+              SizedBox(width: 10.w),
+              Row(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: isExisting ? Colors.grey.shade100 : const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(8.r),
+                    ),
                     padding: EdgeInsets.all(4.r),
-                    child: Icon(
-                      LucideIcons.trash2,
-                      size: 14.sp,
-                      color: Colors.grey.shade400,
+                    child: Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () => isExisting
+                              ? _updateExistingQuantity(item['_id'], -1)
+                              : _updateQuantity(item, -1),
+                          child: Padding(
+                            padding: EdgeInsets.all(4.r),
+                            child: Icon(
+                              LucideIcons.minus,
+                              size: 13.sp,
+                              color: isExisting ? Colors.grey.shade600 : Colors.white,
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 4.w),
+                        Text(
+                          '${item['quantity']}',
+                          style: TextStyle(
+                            fontSize: 13.sp,
+                            fontWeight: FontWeight.w900,
+                            color: isExisting ? Colors.black87 : Colors.white,
+                          ),
+                        ),
+                        SizedBox(width: 4.w),
+                        GestureDetector(
+                          onTap: () => isExisting
+                              ? _updateExistingQuantity(item['_id'], 1)
+                              : _updateQuantity(item, 1),
+                          child: Padding(
+                            padding: EdgeInsets.all(4.r),
+                            child: Icon(
+                              LucideIcons.plus,
+                              size: 13.sp,
+                              color: isExisting ? Colors.grey.shade600 : Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ],
+                  if (isExisting) ...[
+                    SizedBox(width: 6.w),
+                    GestureDetector(
+                      onTap: () => _removeExistingLine(item['_id']),
+                      child: Padding(
+                        padding: EdgeInsets.all(4.r),
+                        child: Icon(
+                          LucideIcons.trash2,
+                          size: 14.sp,
+                          color: Colors.grey.shade400,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
+
+          // Note Section:
+          if (isExisting && note.trim().isNotEmpty) ...[
+            Container(
+              margin: EdgeInsets.only(top: 8.h),
+              padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED), // orange-50
+                borderRadius: BorderRadius.circular(20.r),
+                border: Border.all(color: const Color(0xFFFED7AA)), // orange-200
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('📝 ', style: TextStyle(fontSize: 10.sp)),
+                  Flexible(
+                    child: Text(
+                      note,
+                      style: TextStyle(
+                        fontSize: 10.5.sp,
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFFC2410C), // orange-700
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (!isExisting) ...[
+            Container(
+              margin: EdgeInsets.only(top: 8.h),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10.r),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: TextField(
+                controller: _getNoteController(itemId, note),
+                style: TextStyle(
+                  fontSize: 11.sp,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF334155),
+                ),
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  hintText: 'Note (jaise: no onion, extra spicy)',
+                  hintStyle: TextStyle(
+                    fontSize: 10.5.sp,
+                    color: const Color(0xFF94A3B8),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  border: InputBorder.none,
+                ),
+                onChanged: (val) {
+                  final trimmed = val.trim();
+                  _notesByItemId[itemId] = trimmed;
+                  if (_cart.containsKey(itemId)) {
+                    _cart[itemId]['note'] = trimmed;
+                    _cart[itemId]['notes'] = trimmed;
+                    _cart[itemId]['instruction'] = trimmed;
+                  }
+                },
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -36,6 +36,39 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   // Track newly added items for "New" badge
   final Map<String, List<String>> _newlyAddedItems = {};
 
+  // Track served/ticked items per order (orderId -> Set of item/line IDs)
+  final Map<String, Set<String>> _servedItems = {};
+
+  bool _isItemServed(String orderId, String lineId) {
+    return _servedItems[orderId]?.contains(lineId) ?? false;
+  }
+
+  void _toggleItemServed(String orderId, String lineId) {
+    setState(() {
+      final set = _servedItems[orderId] ?? <String>{};
+      if (set.contains(lineId)) {
+        set.remove(lineId);
+      } else {
+        set.add(lineId);
+      }
+      _servedItems[orderId] = set;
+    });
+  }
+
+  int _getServedCount(dynamic order) {
+    final orderId = (order is Map ? order['_id'] : null)?.toString() ?? '';
+    final items = (order is Map) ? order['items'] : null;
+    if (items is! List) return 0;
+    int count = 0;
+    for (var i in items) {
+      if (i is Map) {
+        final lineId = (i['_id'] ?? i['item']?['_id'] ?? '').toString();
+        if (_isItemServed(orderId, lineId)) count++;
+      }
+    }
+    return count;
+  }
+
   // Pay Later partial amounts and state
   final Map<String, TextEditingController> _partialAmounts = {};
   String? _partialCollectingCustomer;
@@ -1270,6 +1303,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final price = itemPrice * qty;
 
     final orderId = order['_id']?.toString() ?? '';
+    final lineId = (item['_id'] ?? (itemData is Map ? itemData['_id'] : null) ?? itemName).toString();
     final itemId = (itemData is Map ? itemData['_id'] : item['_id'])?.toString();
     final isNewItem = _newlyAddedItems[orderId]?.contains(itemId) == true;
 
@@ -1279,115 +1313,193 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         !isPayLaterOrder &&
         _activeFilter != 'SERVED';
 
-    return Row(
+    final canTick = canRemove;
+    final isTicked = _isItemServed(orderId, lineId);
+    final note = (item['note'] ??
+            item['notes'] ??
+            item['instruction'] ??
+            item['instructions'] ??
+            item['specialInstructions'] ??
+            (item['item'] is Map
+                ? (item['item']['note'] ?? item['item']['notes'] ?? item['item']['instruction'])
+                : null) ??
+            '')
+        .toString()
+        .trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(6.r),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-          ),
-          child: Text(
-            '${qty}x',
-            style: TextStyle(
-              fontSize: 10.sp,
-              fontWeight: FontWeight.w900,
-              color: const Color(0xFF0F172A),
-            ),
-          ),
-        ),
-        SizedBox(width: 8.w),
-        Expanded(
-          child: Row(
-            children: [
-              Flexible(
-                child: Text(
-                  itemName.toString().toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10.5.sp,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF334155),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (isNewItem) ...[
-                SizedBox(width: 4.w),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 1.h),
+        Row(
+          children: [
+            if (canTick) ...[
+              GestureDetector(
+                onTap: () => _toggleItemServed(orderId, lineId),
+                child: Container(
+                  width: 18.r,
+                  height: 18.r,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF10B981),
-                    borderRadius: BorderRadius.circular(10.r),
-                  ),
-                  child: Text(
-                    'NEW',
-                    style: TextStyle(
-                      fontSize: 7.sp,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
+                    color: isTicked ? const Color(0xFF10B981) : Colors.white,
+                    borderRadius: BorderRadius.circular(6.r),
+                    border: Border.all(
+                      color: isTicked ? const Color(0xFF10B981) : const Color(0xFFCBD5E1),
+                      width: 1.5,
                     ),
                   ),
+                  alignment: Alignment.center,
+                  child: isTicked
+                      ? Icon(LucideIcons.check, size: 11.sp, color: Colors.white)
+                      : null,
                 ),
-              ],
-            ],
-          ),
-        ),
-        Text(
-          '₹${price.toInt()}',
-          style: TextStyle(
-            fontSize: 10.5.sp,
-            fontWeight: FontWeight.bold,
-            color: const Color(0xFF94A3B8),
-          ),
-        ),
-        if (canRemove) ...[
-          SizedBox(width: 6.w),
-          InkWell(
-            onTap: () {
-              _removeItemFromOrder(order['_id'].toString(), item['_id'].toString()).then((res) {
-                setState(() {
-                  final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
-                  final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == order['_id'].toString());
-                  if (idx != -1) {
-                    if (res is Map && res['cancelled'] == true) {
-                      _orders.removeAt(idx);
-                    } else {
-                      _orders[idx] = {
-                        ..._orders[idx] as Map,
-                        'items': updatedOrder['items'],
-                        'estimatedTotal': updatedOrder['estimatedTotal'],
-                        'subTotal': updatedOrder['subTotal'],
-                      };
-                    }
-                  }
-                });
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Item removed')),
-                  );
-                }
-              }).catchError((err) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: $err')),
-                  );
-                }
-              });
-            },
-            borderRadius: BorderRadius.circular(10.r),
-            child: Container(
-              width: 16.r,
-              height: 16.r,
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                shape: BoxShape.circle,
               ),
-              child: Icon(
-                LucideIcons.x,
-                size: 9.sp,
-                color: Colors.red.shade400,
+              SizedBox(width: 8.w),
+            ],
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(6.r),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Text(
+                '${qty}x',
+                style: TextStyle(
+                  fontSize: 10.sp,
+                  fontWeight: FontWeight.w900,
+                  color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF0F172A),
+                ),
+              ),
+            ),
+            SizedBox(width: 8.w),
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      itemName.toString().toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 10.5.sp,
+                        fontWeight: FontWeight.bold,
+                        color: isTicked ? const Color(0xFF94A3B8) : const Color(0xFF334155),
+                        decoration: isTicked ? TextDecoration.lineThrough : null,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (isNewItem && !isTicked) ...[
+                    SizedBox(width: 4.w),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 1.h),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981),
+                        borderRadius: BorderRadius.circular(10.r),
+                      ),
+                      child: Text(
+                        'NEW',
+                        style: TextStyle(
+                          fontSize: 7.sp,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Text(
+              '₹${price.toInt()}',
+              style: TextStyle(
+                fontSize: 10.5.sp,
+                fontWeight: FontWeight.bold,
+                color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF94A3B8),
+              ),
+            ),
+            if (canRemove) ...[
+              SizedBox(width: 6.w),
+              InkWell(
+                onTap: () {
+                  _removeItemFromOrder(order['_id'].toString(), item['_id'].toString()).then((res) {
+                    setState(() {
+                      final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
+                      final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == order['_id'].toString());
+                      if (idx != -1) {
+                        if (res is Map && res['cancelled'] == true) {
+                          _orders.removeAt(idx);
+                        } else {
+                          _orders[idx] = {
+                            ..._orders[idx] as Map,
+                            'items': updatedOrder['items'],
+                            'estimatedTotal': updatedOrder['estimatedTotal'],
+                            'subTotal': updatedOrder['subTotal'],
+                          };
+                        }
+                      }
+                    });
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Item removed')),
+                      );
+                    }
+                  }).catchError((err) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed: $err')),
+                      );
+                    }
+                  });
+                },
+                borderRadius: BorderRadius.circular(10.r),
+                child: Container(
+                  width: 16.r,
+                  height: 16.r,
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    LucideIcons.x,
+                    size: 9.sp,
+                    color: Colors.red.shade400,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+
+        // ROW 2: Note tag if present
+        if (note.isNotEmpty) ...[
+          Padding(
+            padding: EdgeInsets.only(top: 4.h, left: canTick ? 26.w : 0),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(8.r),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('📝', style: TextStyle(fontSize: 10.sp)),
+                  SizedBox(width: 4.w),
+                  Flexible(
+                    child: Text(
+                      note,
+                      style: TextStyle(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.w800,
+                        color: isTicked
+                            ? const Color(0xFFC2410C).withValues(alpha: 0.5)
+                            : const Color(0xFFC2410C),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -2053,6 +2165,42 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (!isFullyServed) ...[
+                  Builder(builder: (ctx) {
+                    final done = _getServedCount(order);
+                    final totalItems = (items is List) ? items.length : 0;
+                    if (done > 0 && totalItems > 0) {
+                      return Padding(
+                        padding: EdgeInsets.only(bottom: 8.h),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(4.r),
+                                child: LinearProgressIndicator(
+                                  value: done / totalItems,
+                                  minHeight: 4.h,
+                                  backgroundColor: const Color(0xFFF1F5F9),
+                                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 8.w),
+                            Text(
+                              '$done/$totalItems served',
+                              style: TextStyle(
+                                fontSize: 8.5.sp,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFF10B981),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  }),
+                ],
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -2687,11 +2835,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             },
             sendAppendOrder: _appendTarget,
             onOrderPlaced: (newOrder) {
+              _fetchOrders();
               if (newOrder is Map) {
                 setState(() {
                   final orderId = newOrder['_id'];
-                  final exists = _orders.any((o) => o is Map && o['_id'].toString() == orderId.toString());
-                  if (!exists) {
+                  final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId.toString());
+                  if (idx != -1) {
+                    _orders[idx] = newOrder;
+                  } else {
                     _orders.insert(0, newOrder);
                   }
                 });
@@ -3412,96 +3563,145 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         order['paymentStatus'] != 'PAID' &&
         _activeFilter != 'SERVED';
 
-    return Row(
+    final note = (item['note'] ??
+            item['notes'] ??
+            item['instruction'] ??
+            item['instructions'] ??
+            item['specialInstructions'] ??
+            (item['item'] is Map
+                ? (item['item']['note'] ?? item['item']['notes'] ?? item['item']['instruction'])
+                : null) ??
+            '')
+        .toString()
+        .trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(6.r),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-          ),
-          child: Text(
-            '${qty}x',
-            style: TextStyle(
-              fontSize: 10.sp,
-              fontWeight: FontWeight.w900,
-              color: const Color(0xFF0F172A),
-            ),
-          ),
-        ),
-        SizedBox(width: 8.w),
-        Expanded(
-          child: Text(
-            itemName.toString().toUpperCase(),
-            style: TextStyle(
-              fontSize: 10.5.sp,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF334155),
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        Text(
-          '₹${price.toInt()}',
-          style: TextStyle(
-            fontSize: 10.5.sp,
-            fontWeight: FontWeight.bold,
-            color: const Color(0xFF94A3B8),
-          ),
-        ),
-        if (canRemove) ...[
-          SizedBox(width: 6.w),
-          InkWell(
-            onTap: () {
-              _removeItemFromOrder(
-                order['_id'].toString(),
-                item['_id'].toString(),
-              ).then((res) {
-                setState(() {
-                  final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
-                  final idx = _orders.indexWhere(
-                    (o) => o is Map && o['_id'].toString() == order['_id'].toString(),
-                  );
-                  if (idx != -1) {
-                    if (res is Map && res['cancelled'] == true) {
-                      _orders.removeAt(idx);
-                    } else {
-                      _orders[idx] = {
-                        ..._orders[idx] as Map,
-                        'items': updatedOrder['items'],
-                        'estimatedTotal': updatedOrder['estimatedTotal'],
-                        'subTotal': updatedOrder['subTotal'],
-                      };
-                    }
-                  }
-                });
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Item removed')),
-                  );
-                }
-              }).catchError((err) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: $err')),
-                  );
-                }
-              });
-            },
-            borderRadius: BorderRadius.circular(10.r),
-            child: Container(
-              width: 16.r,
-              height: 16.r,
+        Row(
+          children: [
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
               decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                shape: BoxShape.circle,
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(6.r),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
               ),
-              child: Icon(
-                LucideIcons.x,
-                size: 9.sp,
-                color: Colors.red.shade400,
+              child: Text(
+                '${qty}x',
+                style: TextStyle(
+                  fontSize: 10.sp,
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFF0F172A),
+                ),
+              ),
+            ),
+            SizedBox(width: 8.w),
+            Expanded(
+              child: Text(
+                itemName.toString().toUpperCase(),
+                style: TextStyle(
+                  fontSize: 10.5.sp,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF334155),
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              '₹${price.toInt()}',
+              style: TextStyle(
+                fontSize: 10.5.sp,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF94A3B8),
+              ),
+            ),
+            if (canRemove) ...[
+              SizedBox(width: 6.w),
+              InkWell(
+                onTap: () {
+                  _removeItemFromOrder(
+                    order['_id'].toString(),
+                    item['_id'].toString(),
+                  ).then((res) {
+                    setState(() {
+                      final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
+                      final idx = _orders.indexWhere(
+                        (o) => o is Map && o['_id'].toString() == order['_id'].toString(),
+                      );
+                      if (idx != -1) {
+                        if (res is Map && res['cancelled'] == true) {
+                          _orders.removeAt(idx);
+                        } else {
+                          _orders[idx] = {
+                            ..._orders[idx] as Map,
+                            'items': updatedOrder['items'],
+                            'estimatedTotal': updatedOrder['estimatedTotal'],
+                            'subTotal': updatedOrder['subTotal'],
+                          };
+                        }
+                      }
+                    });
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Item removed')),
+                      );
+                    }
+                  }).catchError((err) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed: $err')),
+                      );
+                    }
+                  });
+                },
+                borderRadius: BorderRadius.circular(10.r),
+                child: Container(
+                  width: 16.r,
+                  height: 16.r,
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    LucideIcons.x,
+                    size: 9.sp,
+                    color: Colors.red.shade400,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        if (note.isNotEmpty) ...[
+          Padding(
+            padding: EdgeInsets.only(top: 4.h, left: 24.w),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(8.r),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('📝', style: TextStyle(fontSize: 10.sp)),
+                  SizedBox(width: 4.w),
+                  Flexible(
+                    child: Text(
+                      note,
+                      style: TextStyle(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFFC2410C),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
