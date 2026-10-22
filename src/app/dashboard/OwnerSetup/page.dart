@@ -882,8 +882,12 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text('Table ${bill['tableNumber'] ?? tableObj['tableName']}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18.sp, color: const Color(0xFF0F172A))),
-                                SizedBox(height: 4.h),
+                                SizedBox(height: 2.h),
                                 Text('BILL SUMMARY', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 1.w)),
+                                if (bill['gstNumber'] != null && bill['gstNumber'].toString().trim().isNotEmpty) ...[
+                                  SizedBox(height: 2.h),
+                                  Text('GSTIN: ${bill['gstNumber']}', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.bold, color: Colors.grey.shade400)),
+                                ],
                               ],
                             ),
                           ],
@@ -1072,6 +1076,27 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                         ),
                                       ),
                                     ),
+                                    if (_discountType != 'NONE') ...[
+                                      SizedBox(width: 8.w),
+                                      InkWell(
+                                        onTap: () {
+                                          setDialogState(() {
+                                            _discountType = 'NONE';
+                                            _discountValue = '';
+                                            discountController.clear();
+                                          });
+                                        },
+                                        borderRadius: BorderRadius.circular(14.r),
+                                        child: Container(
+                                          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 14.h),
+                                          decoration: BoxDecoration(
+                                            border: Border.all(color: Colors.grey.shade200),
+                                            borderRadius: BorderRadius.circular(14.r),
+                                          ),
+                                          child: Icon(LucideIcons.x, size: 14.sp, color: Colors.grey.shade500),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                                 if (_discountType != 'NONE') ...[
@@ -1180,62 +1205,73 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                 final userData = (user != null && user['data'] is Map) ? user['data'] : (user ?? {});
                                 final bool autoPrintBill = userData['autoPrintBill'] == true;
 
-                                return Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        style: OutlinedButton.styleFrom(
-                                          side: BorderSide(color: Colors.grey.shade200),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                                          padding: EdgeInsets.symmetric(vertical: 16.h),
+                                return autoPrintBill
+                                    ? Row(
+                                        children: [
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFFF1F5F9),
+                                                foregroundColor: const Color(0xFF334155),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                elevation: 0,
+                                              ),
+                                              onPressed: (_selectedPaymentMethod == null || _isFinalizingBill)
+                                                  ? null
+                                                  : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: false),
+                                              icon: _isFinalizingBill
+                                                  ? const SizedBox.shrink()
+                                                  : Icon(LucideIcons.receipt, size: 16.sp, color: const Color(0xFF334155)),
+                                              label: _isFinalizingBill
+                                                  ? SizedBox(width: 16.r, height: 16.r, child: const CircularProgressIndicator(color: Color(0xFF334155), strokeWidth: 2))
+                                                  : Text('Mark Paid', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w900)),
+                                            ),
+                                          ),
+                                          SizedBox(width: 8.w),
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFFFF5C00),
+                                                foregroundColor: Colors.white,
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                                elevation: 2,
+                                              ),
+                                              onPressed: (_selectedPaymentMethod == null || _isFinalizingBill)
+                                                  ? null
+                                                  : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: true),
+                                              icon: _isFinalizingBill
+                                                  ? const SizedBox.shrink()
+                                                  : Icon(LucideIcons.printer, size: 16.sp, color: Colors.white),
+                                              label: _isFinalizingBill
+                                                  ? SizedBox(width: 16.r, height: 16.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                                  : Text('Print Bill', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w900)),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : SizedBox(
+                                        width: double.infinity,
+                                        child: ElevatedButton.icon(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFFFF5C00),
+                                            foregroundColor: Colors.white,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                            padding: EdgeInsets.symmetric(vertical: 14.h),
+                                            elevation: 2,
+                                          ),
+                                          onPressed: (_selectedPaymentMethod == null || _isFinalizingBill)
+                                              ? null
+                                              : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: false),
+                                          icon: _isFinalizingBill
+                                              ? const SizedBox.shrink()
+                                              : Icon(LucideIcons.receipt, size: 16.sp, color: Colors.white),
+                                          label: _isFinalizingBill
+                                              ? SizedBox(width: 16.r, height: 16.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                              : Text('Mark Paid', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w900)),
                                         ),
-                                        onPressed: () {
-                                          Navigator.pop(ctx);
-                                        },
-                                        child: Text('Close', style: TextStyle(color: Colors.grey.shade700, fontSize: 13.sp, fontWeight: FontWeight.bold)),
-                                      ),
-                                    ),
-                                    SizedBox(width: 8.w),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        style: OutlinedButton.styleFrom(
-                                          side: const BorderSide(color: Color(0xFFFF5C00), width: 1.5),
-                                          foregroundColor: const Color(0xFFFF5C00),
-                                          backgroundColor: const Color(0xFFFFF5ED),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                                          padding: EdgeInsets.symmetric(vertical: 16.h),
-                                        ),
-                                        onPressed: _isPrintingBill ? null : () => _printCurrentBill(setDialogState),
-                                        icon: _isPrintingBill
-                                            ? SizedBox(width: 16.r, height: 16.r, child: const CircularProgressIndicator(color: Color(0xFFFF5C00), strokeWidth: 2))
-                                            : Icon(LucideIcons.printer, size: 16.sp, color: const Color(0xFFFF5C00)),
-                                        label: Text('Print Bill', style: TextStyle(color: const Color(0xFFFF5C00), fontSize: 13.sp, fontWeight: FontWeight.w900)),
-                                      ),
-                                    ),
-                                    SizedBox(width: 8.w),
-                                    Expanded(
-                                      child: ElevatedButton.icon(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: const Color(0xFFFF5C00),
-                                          foregroundColor: Colors.white,
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
-                                          padding: EdgeInsets.symmetric(vertical: 16.h),
-                                          disabledBackgroundColor: Colors.grey.shade300,
-                                          elevation: 2,
-                                        ),
-                                        onPressed: (_selectedPaymentMethod == null || _isFinalizingBill) 
-                                            ? null 
-                                            : () => _finalizeBillWithPayment(ctx, setDialogState, shouldPrint: autoPrintBill),
-                                        icon: _isFinalizingBill 
-                                            ? const SizedBox.shrink()
-                                            : Icon(LucideIcons.receipt, size: 16.sp, color: Colors.white),
-                                        label: _isFinalizingBill 
-                                            ? SizedBox(width: 18.r, height: 18.r, child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                            : Text('Mark Paid', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w900)),
-                                      ),
-                                    ),
-                                  ],
-                                );
+                                      );
                               }
                             ),
                           ),
@@ -2229,16 +2265,16 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                     SizedBox(height: 16.h),
                     SizedBox(
                       width: double.infinity,
-                      child: OutlinedButton(
-                        style: OutlinedButton.styleFrom(
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0F172A),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
                           padding: EdgeInsets.symmetric(vertical: 14.h),
+                          elevation: 2,
                         ),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          context.go('/dashboard/settings');
-                        },
-                        child: Text('More Printer Settings', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.bold, color: Colors.grey.shade700)),
+                        onPressed: () => Navigator.pop(ctx),
+                        child: Text('DONE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, letterSpacing: 1.w)),
                       ),
                     ),
                   ],
@@ -2306,8 +2342,10 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                             ],
                           ),
                         ),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
+                        Wrap(
+                          spacing: 8.w,
+                          runSpacing: 8.h,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             Stack(
                               clipBehavior: Clip.none,
@@ -2316,7 +2354,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                   onPressed: () => _showPrinterSettingsModal(context),
                                   icon: Icon(
                                     LucideIcons.printer,
-                                    size: 18.sp,
+                                    size: 16.sp,
                                     color: (autoPrintKOT || autoPrintBill)
                                         ? const Color(0xFF059669)
                                         : const Color(0xFF475569),
@@ -2331,27 +2369,27 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                           ? const Color(0xFFA7F3D0)
                                           : Colors.grey.shade200,
                                     ),
-                                    padding: EdgeInsets.all(14.r),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                    padding: EdgeInsets.all(isMobile ? 10.r : 12.r),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
                                   ),
                                 ),
                                 if (autoPrintKOT || autoPrintBill)
                                   Positioned(
-                                    top: -4.h,
-                                    right: -4.w,
+                                    top: -3.h,
+                                    right: -3.w,
                                     child: Container(
-                                      padding: EdgeInsets.all(4.r),
+                                      padding: EdgeInsets.all(3.r),
                                       decoration: const BoxDecoration(
                                         color: Color(0xFF10B981),
                                         shape: BoxShape.circle,
                                       ),
-                                      constraints: BoxConstraints(minWidth: 16.r, minHeight: 16.r),
+                                      constraints: BoxConstraints(minWidth: 14.r, minHeight: 14.r),
                                       child: Center(
                                         child: Text(
                                           '${(autoPrintKOT ? 1 : 0) + (autoPrintBill ? 1 : 0)}',
                                           style: TextStyle(
                                             color: Colors.white,
-                                            fontSize: 9.sp,
+                                            fontSize: 8.sp,
                                             fontWeight: FontWeight.w900,
                                             height: 1.0,
                                           ),
@@ -2361,16 +2399,33 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                   ),
                               ],
                             ),
-                            SizedBox(width: 12.w),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  _selectedTable = null;
+                                });
+                                _scaffoldKey.currentState?.openEndDrawer();
+                              },
+                              icon: Icon(LucideIcons.plus, size: 14.sp),
+                              label: Text('CREATE ORDER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: isMobile ? 10.5.sp : 12.sp)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0F172A),
+                                foregroundColor: Colors.white,
+                                padding: EdgeInsets.symmetric(horizontal: isMobile ? 12.w : 16.w, vertical: isMobile ? 10.h : 13.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                elevation: 2,
+                              ),
+                            ),
                             ElevatedButton.icon(
                               onPressed: () => context.go('/dashboard/pos'),
-                              icon: Icon(LucideIcons.plus, size: 18.sp),
-                              label: Text('ADD NEW TABLES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.sp)),
+                              icon: Icon(LucideIcons.plus, size: 14.sp),
+                              label: Text('ADD NEW TABLES', style: TextStyle(fontWeight: FontWeight.bold, fontSize: isMobile ? 10.5.sp : 12.sp)),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFFFF5C00),
                                 foregroundColor: Colors.white,
-                                padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.h),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+                                padding: EdgeInsets.symmetric(horizontal: isMobile ? 12.w : 16.w, vertical: isMobile ? 10.h : 13.h),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14.r)),
+                                elevation: 2,
                               ),
                             ),
                           ],
