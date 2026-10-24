@@ -10,6 +10,7 @@ import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import '../../components/MenuModal.dart';
 import '../../../services/kot_print_service.dart';
+import '../../../services/auto_kot_print_service.dart';
 import '../../../utils/responsive.dart';
 
 class OrdersPage extends ConsumerStatefulWidget {
@@ -202,8 +203,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               // TRIGGER 2: Add-on items added to existing order
               // if user.autoPrintKOT == true AND user.liveOrderKOT == false:
               //     showKOTPrompt(order: existingOrder, items: socketData.newItems, isAddOn: true)
-              // Note: when liveOrderKOT is true, backend handles this automatically
-              if (autoPrintKOT && !liveOrderKOT) {
+              // Note: silent auto-print (liveOrderKOT / skipAutoPrint == false)
+              // is handled globally by AutoKotPrintManager in DashboardLayout.
+              if (autoPrintKOT && !liveOrderKOT && newOrder['skipAutoPrint'] != false) {
                 _showKOTToast(_orders[idx], newItems, true);
               }
             }
@@ -228,15 +230,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           }
 
           final items = (newOrder['items'] is List) ? List<dynamic>.from(newOrder['items']) : <dynamic>[];
-          if (liveOrderKOT) {
-            // Skip if this order was already printed locally (e.g. placed via MenuModal)
-            final alreadyPrinted = ref.read(locallyPrintedOrderIds).contains(orderId);
-            if (!alreadyPrinted) {
-              _silentPrintKOT(newOrder, items, false);
-            } else {
-              debugPrint('⚙️ Socket new_order: skipping duplicate print for $orderId (already printed locally)');
-            }
-          } else if (autoPrintKOT) {
+          // Silent auto-print is done globally by AutoKotPrintManager
+          // (DashboardLayout) — printing here too would double-print.
+          // Only the semi-auto "PRINT KOT" prompt lives on this page.
+          if (autoPrintKOT && !liveOrderKOT && newOrder['skipAutoPrint'] != false) {
             final alreadyPrinted = ref.read(locallyPrintedOrderIds).contains(orderId);
             if (!alreadyPrinted) {
               _showKOTToast(newOrder, items, false);
@@ -863,7 +860,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                 : <dynamic>[]);
 
         if (liveOrderKOT) {
-          _silentPrintKOT(updatedOrder, items, false);
+          // Skip if the global auto-KOT already printed it on arrival
+          final acceptedId = (updatedOrder is Map ? updatedOrder['_id'] : order['_id'])?.toString() ?? '';
+          if (!ref.read(autoKotPrintManagerProvider).wasAutoPrinted(acceptedId)) {
+            _silentPrintKOT(updatedOrder, items, false);
+          }
         } else if (autoPrintKOT) {
           _showKOTToast(updatedOrder, items, false);
         }

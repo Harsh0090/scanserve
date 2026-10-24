@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../context/AuthContext.dart';
 import '../../utils/apiClient.dart';
 import '../../services/kot_print_service.dart';
+import '../../services/auto_kot_print_service.dart';
 
 class MenuModal extends ConsumerStatefulWidget {
   final Map<String, dynamic>? table;
@@ -358,6 +359,16 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         }
 
         final orderId = widget.sendAppendOrder!['currentOrderId'] as String;
+
+        // This device prints the add-on KOT itself below, so register it
+        // BEFORE the API calls — the global auto-KOT (order_modified) then
+        // skips it instead of printing the same add-on twice.
+        if (shouldPrintKOT) {
+          final printedIds = ref.read(locallyPrintedOrderIds.notifier);
+          final key = AutoKotPrintManager.addOnLocalKey(orderId);
+          printedIds.add(key);
+          Future.delayed(const Duration(seconds: 30), () => printedIds.remove(key));
+        }
 
         // Identify removed lines
         final removedIds = _originalQuantities.keys
