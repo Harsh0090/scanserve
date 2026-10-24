@@ -48,8 +48,12 @@ final Dio dioClient = Dio(
 );
 
 late PersistCookieJar cookieJar;
+bool _cookiesReady = false;
 
+// Idempotent: also called from background isolates (FCM, alarm service).
 Future<void> initCookies() async {
+  if (_cookiesReady) return;
+  _cookiesReady = true;
   final appDocDir = await getApplicationDocumentsDirectory();
   cookieJar = PersistCookieJar(storage: FileStorage("${appDocDir.path}/.cookies/"));
   dioClient.interceptors.add(CookieManager(cookieJar));

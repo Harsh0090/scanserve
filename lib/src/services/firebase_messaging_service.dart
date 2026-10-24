@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../utils/apiClient.dart';
+import 'kds_notification_filter.dart';
 import 'order_alarm_service.dart';
 
 /// Top-level background message handler.
@@ -206,6 +207,16 @@ class FirebaseMessagingService {
         (type == '' && data['orderId'] != null);
     bool isReady = type == 'READY';
     bool isUpdate = type == 'UPDATE';
+
+    // KDS off for every (newly added) item → no notification, like the website.
+    if ((isOrder || isReady || isUpdate) &&
+        !await KdsNotificationFilter.shouldNotifyForPush(
+          (data['orderId'] ?? '').toString(),
+          isOrder ? 'NEW' : type,
+        )) {
+      log('🔕 FCM: Skipping notification — no KDS items (orderId=${data['orderId']})');
+      return;
+    }
 
     String channelId = 'default_notification_channel';
     String soundResource = '';
