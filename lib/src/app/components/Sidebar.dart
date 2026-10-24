@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_screenutil/flutter_screenutil.dart';
+import '../../utils/apiClient.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../context/AuthContext.dart';
+import '../../utils/responsive.dart';
 
-// ─── Breakpoint (must match DashboardLayout) ─────────────────────────────
-const double _kTabletBreakpoint = 768.0;
+// Website palette (Sidebar.js)
+const Color _kNavy = Color(0xFF0F172A);
+const Color _kPanel = Color(0xFF1E293B);
+const Color _kOrange = Color(0xFFFF5C00);
 
 class Sidebar extends ConsumerStatefulWidget {
   /// [isInline] = true  → rendered as a persistent left-rail on tablets.
@@ -158,20 +162,254 @@ class _SidebarState extends ConsumerState<Sidebar> {
     return filteredItems;
   }
 
+  // ── Low-stock alerts (same source as the website's bell) ────────────────
+  List<Map<String, dynamic>> _lowStockItems = [];
+  Timer? _lowStockTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLowStock();
+    _lowStockTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _fetchLowStock(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _lowStockTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetchLowStock() async {
+    if (ref.read(authProvider).user == null) return;
+    try {
+      final res = await apiFetch('/api/inventory/items');
+      final all = (res is Map ? res['data'] : null) ?? [];
+      if (all is! List) return;
+      final low = all
+          .whereType<Map>()
+          .where((i) =>
+              (num.tryParse('${i['currentStock']}') ?? 0) <=
+              (num.tryParse('${i['lowStockThreshold']}') ?? 0))
+          .map((i) => Map<String, dynamic>.from(i))
+          .toList();
+      if (mounted) setState(() => _lowStockItems = low);
+    } catch (_) {
+      // Non-critical: the bell simply shows no alerts.
+    }
+  }
+
   void _handleLogout() async {
     await ref.read(authProvider.notifier).logout();
     if (mounted) context.go('/');
   }
 
-  void _navigateTo(String href) {
-    // On mobile (drawer mode) pop the drawer first, then navigate.
+  void _closeDrawerIfOpen() {
     if (!widget.isInline) {
-      final scaffold = Scaffold.of(context);
-      if (scaffold.isDrawerOpen) {
+      final scaffold = Scaffold.maybeOf(context);
+      if (scaffold != null && scaffold.isDrawerOpen) {
         Navigator.of(context).pop();
       }
     }
+  }
+
+  void _navigateTo(String href) {
+    // On mobile (drawer mode) pop the drawer first, then navigate.
+    _closeDrawerIfOpen();
     context.go(href);
+  }
+
+  // ── Low-stock dropdown panel (mirrors the website) ─────────────────────
+  void _showLowStockPanel() {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black26,
+      builder: (ctx) => Align(
+        alignment: Alignment.topLeft,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 16, top: 90),
+          child: Material(
+            color: _kPanel,
+            borderRadius: BorderRadius.circular(16),
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              width: 288,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildPanelHeader(),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 288),
+                    child: _lowStockItems.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 32),
+                            child: Column(
+                              children: [
+                                Icon(LucideIcons.package,
+                                    size: 28, color: Color(0xFF475569)),
+                                SizedBox(height: 8),
+                                Text(
+                                  'All stock levels are healthy',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF94A3B8),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            children: _lowStockItems
+                                .map((item) => _buildLowStockRow(ctx, item))
+                                .toList(),
+                          ),
+                  ),
+                  InkWell(
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _navigateTo('/dashboard/inventory');
+                    },
+                    child: Container(
+                      color: const Color(0x33000000),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: const Text(
+                        'VIEW FULL INVENTORY →',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: _kOrange,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPanelHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0x1AFFFFFF))),
+      ),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.triangleAlert,
+              size: 14, color: Color(0xFFFB923C)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'LOW STOCK ALERTS',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: 1.6,
+              ),
+            ),
+          ),
+          if (_lowStockItems.isNotEmpty)
+            _pill('${_lowStockItems.length} items', const Color(0x33EF4444)),
+        ],
+      ),
+    );
+  }
+
+  Widget _pill(String text, Color bg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
+          color: Color(0xFFF87171),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLowStockRow(BuildContext ctx, Map<String, dynamic> item) {
+    final stock = num.tryParse('${item['currentStock']}') ?? 0;
+    final min = num.tryParse('${item['lowStockThreshold']}') ?? 0;
+    final double pct =
+        min > 0 ? (stock / min * 100).clamp(4, 100).toDouble() : 100;
+
+    return InkWell(
+      onTap: () {
+        Navigator.of(ctx).pop();
+        _navigateTo('/dashboard/inventory');
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0x0DFFFFFF))),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${item['name'] ?? ''}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                _pill('LOW', const Color(0x1AEF4444)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '$stock ${item['unit'] ?? ''} remaining',
+                  style:
+                      const TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
+                ),
+                Text(
+                  'Min: $min',
+                  style:
+                      const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: pct / 100,
+                minHeight: 4,
+                backgroundColor: const Color(0x1AFFFFFF),
+                color: const Color(0xFFF87171),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -181,9 +419,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
     if (authState.loading2) {
       return Container(
         width: double.infinity,
-        color: Colors.white,
+        color: _kNavy,
         child: const Center(
-          child: CircularProgressIndicator(color: Color(0xFFFF5C00)),
+          child: CircularProgressIndicator(color: _kOrange),
         ),
       );
     }
@@ -191,94 +429,70 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final navItems = _getFilteredItems(authState.user);
     final currentPath = GoRouterState.of(context).uri.toString();
 
-    // ── Adaptive sizing ────────────────────────────────────────────────────
-    // When inline on a tablet we use slightly tighter paddings / font sizes
-    // so the sidebar fits in its 240 dp column without relying on .sp / .w
-    // scaling (which targets the 402-wide phone canvas).
-    final screenWidth = MediaQuery.of(context).size.width;
-    final bool isTablet = screenWidth >= _kTabletBreakpoint;
+    // Landscape phones have little vertical room – tighten the rail.
+    final bool compact = Responsive.isCompactHeight(context);
+    final double logoPad = compact ? 16.0 : 24.0;
+    final double itemPad = compact ? 11.0 : 15.0;
 
-    final double itemVertPad = isTablet ? 12.0 : 14.h;
-    final double itemHorizPad = isTablet ? 14.0 : 16.w;
-    final double itemFontSize = isTablet ? 13.0 : 14.sp;
-    final double iconSize = isTablet ? 20.0 : 22.sp;
-    final double itemSpacing = isTablet ? 10.0 : 14.w;
-    final double listHorizPad = isTablet ? 12.0 : 16.w;
-    final double listVertPad = isTablet ? 10.0 : 12.h;
-    final double itemRadius = isTablet ? 14.0 : 16.0;
-    final double logoIconSize = isTablet ? 18.0 : 20.sp;
-    final double logoFontSize = isTablet ? 16.0 : 18.sp;
-    final double logoPad = isTablet ? 16.0 : 20.0;
-
-    return SafeArea(
-      child: Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(right: BorderSide(color: Color(0xFFEFF2F4))),
-        ),
+    return Container(
+      width: double.infinity,
+      color: _kNavy,
+      child: SafeArea(
+        right: false,
         child: Column(
           children: [
-            // ── LOGO & CLOSE SECTION ───────────────────────────────────
+            // ── LOGO + BELL ROW ─────────────────────────────────────────
             Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: logoPad,
-                vertical: logoPad,
-              ),
+              padding: EdgeInsets.fromLTRB(logoPad, logoPad, 8, logoPad),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Expanded(
                     child: GestureDetector(
                       onTap: () {
+                        _closeDrawerIfOpen();
                         context.go('/');
-                        if (!widget.isInline &&
-                            Scaffold.of(context).hasDrawer) {
-                          Navigator.of(context).pop();
-                        }
                       },
                       child: Row(
                         children: [
                           Container(
-                            padding: EdgeInsets.all(isTablet ? 6.0 : 6.r),
+                            padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFF5C00),
-                              borderRadius: BorderRadius.circular(
-                                isTablet ? 8.0 : 8.r,
-                              ),
-                            ),
-                            child: Icon(
-                              LucideIcons.qrCode,
-                              color: Colors.white,
-                              size: logoIconSize,
-                            ),
-                          ),
-                          SizedBox(width: isTablet ? 10.0 : 10.w),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'Scan Serve',
-                                  style: TextStyle(
-                                    fontSize: logoFontSize,
-                                    fontWeight: FontWeight.w900,
-                                    color: const Color(0xFF0F172A),
-                                    height: 1.1,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  'ADMIN PORTAL',
-                                  style: TextStyle(
-                                    fontSize: isTablet ? 9.0 : 9.sp,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.grey,
-                                    letterSpacing: 1,
-                                  ),
+                              color: _kOrange,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _kOrange.withAlpha(50),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
                                 ),
                               ],
+                            ),
+                            child: const Icon(
+                              LucideIcons.qrCode,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Flexible(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(text: 'SCAN'),
+                                  TextSpan(
+                                    text: 'SERVE',
+                                    style: TextStyle(color: _kOrange),
+                                  ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 19,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                letterSpacing: -0.8,
+                              ),
                             ),
                           ),
                         ],
@@ -286,131 +500,168 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     ),
                   ),
 
-                  // Show close button only inside a Drawer (mobile)
+                  // Bell with low-stock count
+                  IconButton(
+                    onPressed: _showLowStockPanel,
+                    tooltip: 'Low Stock Alerts',
+                    icon: Badge(
+                      isLabelVisible: _lowStockItems.isNotEmpty,
+                      backgroundColor: const Color(0xFFEF4444),
+                      label: Text(
+                        '${_lowStockItems.length}',
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      child: Icon(
+                        LucideIcons.bell,
+                        size: 20,
+                        color: _lowStockItems.isNotEmpty
+                            ? const Color(0xFFFB923C)
+                            : const Color(0xFF64748B),
+                      ),
+                    ),
+                  ),
+
+                  // Close button only inside a Drawer (mobile)
                   if (!widget.isInline)
                     IconButton(
-                      icon: Icon(
+                      icon: const Icon(
                         LucideIcons.x,
-                        size: isTablet ? 20.0 : 20.sp,
-                        color: const Color(0xFF64748B),
+                        size: 20,
+                        color: Color(0xFF94A3B8),
                       ),
-                      onPressed: () {
-                        if (Scaffold.of(context).hasDrawer) {
-                          Navigator.of(context).pop();
-                        }
-                      },
+                      onPressed: _closeDrawerIfOpen,
                       tooltip: 'Close Menu',
                     ),
                 ],
               ),
             ),
 
-            const Divider(height: 1, color: Color(0xFFEFF2F4)),
-
-            // ── NAVIGATION ITEMS ─────────────────────────────────────────
+            // ── NAVIGATION ──────────────────────────────────────────────
             Expanded(
-              child: ListView.builder(
-                padding: EdgeInsets.symmetric(
-                  horizontal: listHorizPad,
-                  vertical: listVertPad,
-                ),
-                itemCount: navItems.length,
-                itemBuilder: (context, index) {
-                  final item = navItems[index];
-                  final bool isActive = currentPath.startsWith(item['href']);
-
-                  return InkWell(
-                    onTap: () => _navigateTo(item['href']),
-                    borderRadius: BorderRadius.circular(itemRadius),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      margin: EdgeInsets.only(
-                        bottom: isTablet ? 6.0 : 8.h,
-                      ),
-                      padding: EdgeInsets.symmetric(
-                        vertical: itemVertPad,
-                        horizontal: itemHorizPad,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isActive
-                            ? const Color(0xFFFF5C00)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(itemRadius),
-                        boxShadow: isActive
-                            ? [
-                                BoxShadow(
-                                  color: const Color(0xFFFF5C00).withAlpha(100),
-                                  blurRadius: isTablet ? 8.0 : 10.r,
-                                  offset: Offset(0, isTablet ? 3.0 : 4.h),
-                                ),
-                              ]
-                            : [],
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            item['icon'],
-                            size: iconSize,
-                            color: isActive
-                                ? Colors.white
-                                : const Color(0xFF475569),
-                          ),
-                          SizedBox(width: itemSpacing),
-                          Expanded(
-                            child: Text(
-                              item['name'],
-                              style: TextStyle(
-                                fontSize: itemFontSize,
-                                fontWeight: FontWeight.bold,
-                                color: isActive
-                                    ? Colors.white
-                                    : const Color(0xFF475569),
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    child: Text(
+                      'MAIN TERMINAL',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF64748B),
+                        letterSpacing: 2,
                       ),
                     ),
-                  );
-                },
+                  ),
+                  for (final item in navItems)
+                    _buildNavItem(
+                      item,
+                      isActive: currentPath.startsWith(item['href']),
+                      padding: itemPad,
+                    ),
+                ],
               ),
             ),
 
-            // ── FOOTER LOGOUT ─────────────────────────────────────────────
+            // ── FOOTER ──────────────────────────────────────────────────
             Container(
-              padding: EdgeInsets.all(isTablet ? 16.0 : 20.r),
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: compact ? 8 : 16),
               decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Color(0xFFEFF2F4))),
+                color: Color(0x33000000),
+                border: Border(top: BorderSide(color: Color(0x0DFFFFFF))),
               ),
               child: InkWell(
+                borderRadius: BorderRadius.circular(16),
                 onTap: () {
-                  if (!widget.isInline && Scaffold.of(context).hasDrawer) {
-                    Navigator.of(context).pop();
-                  }
+                  _closeDrawerIfOpen();
                   _handleLogout();
                 },
-                child: Row(
-                  children: [
-                    Icon(
-                      LucideIcons.logOut,
-                      size: iconSize,
-                      color: Colors.grey,
-                    ),
-                    SizedBox(width: itemSpacing),
-                    Text(
-                      'Sign Out',
-                      style: TextStyle(
-                        fontSize: itemFontSize,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: itemPad),
+                  child: const Row(
+                    children: [
+                      Icon(LucideIcons.logOut,
+                          size: 20, color: Color(0xFFF87171)),
+                      SizedBox(width: 12),
+                      Flexible(
+                        child: Text(
+                          'TERMINATE SESSION',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFFF87171),
+                            letterSpacing: 1.6,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItem(
+    Map<String, dynamic> item, {
+    required bool isActive,
+    required double padding,
+  }) {
+    final bool showLowDot =
+        item['name'] == 'Inventory' && _lowStockItems.isNotEmpty;
+    final Color fg = isActive ? Colors.white : const Color(0xB394A3B8);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: isActive ? _kOrange : Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        shadowColor: _kOrange.withAlpha(60),
+        elevation: isActive ? 6 : 0,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          hoverColor: const Color(0x0DFFFFFF),
+          onTap: () => _navigateTo(item['href']),
+          child: Padding(
+            padding: EdgeInsets.all(padding),
+            child: Row(
+              children: [
+                Icon(item['icon'], size: 20, color: fg),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    (item['name'] as String).toUpperCase(),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: fg,
+                      letterSpacing: 1.6,
+                    ),
+                  ),
+                ),
+                if (showLowDot)
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFEF4444),
+                      shape: BoxShape.circle,
+                    ),
+                  )
+                else if (isActive)
+                  const Icon(LucideIcons.chevronRight,
+                      size: 14, color: Colors.white),
+              ],
+            ),
+          ),
         ),
       ),
     );

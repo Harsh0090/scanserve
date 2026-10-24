@@ -4,10 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../components/Sidebar.dart';
 import '../../services/order_alarm_service.dart';
-
-// ─── Breakpoint ────────────────────────────────────────────────────────────
-// Screens with a logical width ≥ 768 dp are treated as "tablet" mode.
-const double _kTabletBreakpoint = 768.0;
+import '../../utils/responsive.dart';
 
 class DashboardLayout extends ConsumerStatefulWidget {
   final Widget child;
@@ -22,10 +19,11 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final bool isTablet = screenWidth >= _kTabletBreakpoint;
-
-    return isTablet ? _buildTabletLayout() : _buildMobileLayout();
+    // Website layout for tablets and every landscape device,
+    // drawer-based mobile layout for portrait phones.
+    return Responsive.useDesktopLayout(context)
+        ? _buildTabletLayout()
+        : _buildMobileLayout();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -44,14 +42,8 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
           children: [
             // ── Persistent sidebar ──────────────────────────────────────
             SizedBox(
-              width: 240,
+              width: Responsive.sidebarWidth(context),
               child: const Sidebar(isInline: true),
-            ),
-
-            // ── Thin divider ─────────────────────────────────────────────
-            Container(
-              width: 1,
-              color: const Color(0xFFEFF2F4),
             ),
 
             // ── Main content ─────────────────────────────────────────────
@@ -73,11 +65,13 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF9FAFB),
+      // Dark mobile header, same as the website's mobile top bar.
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF0F172A),
         elevation: 0,
         scrolledUnderElevation: 0,
-        iconTheme: const IconThemeData(color: Color(0xFF0F172A)),
+        automaticallyImplyLeading: false,
+        titleSpacing: 16,
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -90,38 +84,51 @@ class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
               child: Icon(
                 LucideIcons.qrCode,
                 color: Colors.white,
-                size: 18.sp,
+                size: 16.sp,
               ),
             ),
             SizedBox(width: 8.w),
-            RichText(
-              text: TextSpan(
-                style: TextStyle(
-                  fontSize: 18.sp,
-                  fontWeight: FontWeight.w900,
-                  color: const Color(0xFF0F172A),
-                ),
-                children: const [
-                  TextSpan(text: 'Scan '),
+            Text.rich(
+              const TextSpan(
+                children: [
+                  TextSpan(text: 'SCAN'),
                   TextSpan(
-                    text: 'Serve',
+                    text: 'SERVE',
                     style: TextStyle(color: Color(0xFFFF5C00)),
                   ),
                 ],
+              ),
+              style: TextStyle(
+                fontSize: 15.sp,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: -0.4,
               ),
             ),
           ],
         ),
         centerTitle: false,
-        leading: IconButton(
-          icon: const Icon(Icons.menu),
-          tooltip: 'Navigation Menu',
-          onPressed: () {
-            _scaffoldKey.currentState?.openDrawer();
-          },
-        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Material(
+              color: Colors.white.withAlpha(25),
+              borderRadius: BorderRadius.circular(12),
+              child: IconButton(
+                icon: const Icon(LucideIcons.menu, color: Colors.white),
+                tooltip: 'Navigation Menu',
+                onPressed: () {
+                  _scaffoldKey.currentState?.openDrawer();
+                },
+              ),
+            ),
+          ),
+        ],
       ),
       drawer: const Drawer(
+        width: 300,
+        backgroundColor: Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(),
         child: Sidebar(isInline: false),
       ),
       body: Listener(

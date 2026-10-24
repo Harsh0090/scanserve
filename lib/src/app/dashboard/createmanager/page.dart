@@ -3,6 +3,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
+import '../../../utils/responsive.dart';
 
 class ManagerCreatePage extends ConsumerStatefulWidget {
   const ManagerCreatePage({super.key});
@@ -209,7 +210,7 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
                 ),
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    final isDesktop = MediaQuery.of(context).size.width >= 768;
+                    final isDesktop = Responsive.useDesktopLayout(context);
                     return Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -284,7 +285,7 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
                 // Left Pane: Registration Form (Desktop)
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    if (MediaQuery.of(context).size.width < 768) {
+                    if (!Responsive.useDesktopLayout(context)) {
                       return const SizedBox.shrink();
                     }
                     return _buildFormPane();
@@ -520,7 +521,9 @@ class _ManagerCreatePageState extends ConsumerState<ManagerCreatePage> {
 
   Widget _buildFormPane({bool isDrawer = false}) {
     return Container(
-      width: isDrawer ? double.infinity : 450.w,
+      width: isDrawer
+          ? double.infinity
+          : Responsive.sidePaneWidth(context, 450.w),
       padding: EdgeInsets.all(isDrawer ? 24.r : 32.r),
       decoration: BoxDecoration(
         color: Colors.white,

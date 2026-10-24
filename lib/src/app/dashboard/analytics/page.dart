@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -433,17 +432,12 @@ class _AnalyticsPageState extends ConsumerState<AnalyticsPage> {
               ),
               if (isFoodTruck || isRestaurant) ...[
                 SizedBox(height: 24.h),
-                LayoutBuilder(
-                  builder: (ctx, constraints) {
-                    return ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: min(450.0, constraints.maxWidth),
-                      ),
-                      child: _buildPaymentBreakdown(
-                        _summary?['paymentBreakdown'],
-                      ),
-                    );
-                  },
+                // Full width when stacked, as on the website (grid-cols-1).
+                SizedBox(
+                  width: double.infinity,
+                  child: _buildPaymentBreakdown(
+                    _summary?['paymentBreakdown'],
+                  ),
                 ),
               ],
               SizedBox(height: 24.h),

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -11,6 +10,7 @@ import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import '../../components/MenuModal.dart';
 import '../../../services/kot_print_service.dart';
+import '../../../utils/responsive.dart';
 
 class OrdersPage extends ConsumerStatefulWidget {
   const OrdersPage({super.key});
@@ -1148,54 +1148,45 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     return list.take(4).toList();
   }
 
-  Widget _buildPaymentButton({
-    required IconData icon,
+  /// Compact order-card button matching the website
+  /// (rounded-lg, border, text-[8px] font-black uppercase).
+  Widget _webCardButton({
     required String label,
-    required VoidCallback onPressed,
-    bool isSplit = false,
-    bool isLoading = false,
+    required Color bg,
+    required Color border,
+    required Color fg,
+    required VoidCallback? onPressed,
+    double vertical = 8,
+    double letterSpacing = 0.4,
   }) {
-    final bgColor = isSplit ? Colors.purple.shade50 : Colors.grey.shade50;
-    final fgColor = isSplit ? Colors.purple.shade700 : Colors.grey.shade700;
-    final borderColor = isSplit ? Colors.purple.shade200 : Colors.grey.shade200;
-
     return Expanded(
-      child: OutlinedButton(
-        onPressed: isLoading ? null : onPressed,
-        style: OutlinedButton.styleFrom(
-          backgroundColor: bgColor,
-          foregroundColor: fgColor,
-          side: BorderSide(color: borderColor, width: 1.r),
-          padding: EdgeInsets.symmetric(vertical: 14.h),
+      child: Opacity(
+        opacity: onPressed == null ? 0.6 : 1,
+        child: Material(
+          color: bg,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.r),
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(color: border),
           ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (isLoading)
-              SizedBox(
-                width: 12.r,
-                height: 12.r,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.r,
-                  valueColor: AlwaysStoppedAnimation<Color>(fgColor),
-                ),
-              )
-            else ...[
-              Icon(icon, size: 14.sp),
-              SizedBox(width: 4.w),
-              Text(
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: vertical),
+              child: Text(
                 label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 9.sp,
+                  fontSize: 8,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5.w,
+                  color: fg,
+                  letterSpacing: letterSpacing,
                 ),
               ),
-            ]
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -1269,24 +1260,24 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     }
 
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(12.r),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(LucideIcons.checkCircle2, size: 10.sp, color: text),
-          SizedBox(width: 4.w),
+          Icon(LucideIcons.checkCircle2, size: 8, color: text),
+          SizedBox(width: 4),
           Text(
             label,
             style: TextStyle(
-              fontSize: 8.5.sp,
+              fontSize: 8,
               fontWeight: FontWeight.w900,
               color: text,
-              letterSpacing: 0.5.w,
+              letterSpacing: 0.5,
             ),
           ),
         ],
@@ -1336,11 +1327,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               GestureDetector(
                 onTap: () => _toggleItemServed(orderId, lineId),
                 child: Container(
-                  width: 18.r,
-                  height: 18.r,
+                  width: 16,
+                  height: 16,
                   decoration: BoxDecoration(
                     color: isTicked ? const Color(0xFF10B981) : Colors.white,
-                    borderRadius: BorderRadius.circular(6.r),
+                    borderRadius: BorderRadius.circular(6),
                     border: Border.all(
                       color: isTicked ? const Color(0xFF10B981) : const Color(0xFFCBD5E1),
                       width: 1.5,
@@ -1348,29 +1339,29 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   ),
                   alignment: Alignment.center,
                   child: isTicked
-                      ? Icon(LucideIcons.check, size: 11.sp, color: Colors.white)
+                      ? Icon(LucideIcons.check, size: 11, color: Colors.white)
                       : null,
                 ),
               ),
-              SizedBox(width: 8.w),
+              SizedBox(width: 6),
             ],
             Container(
-              padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(6.r),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: const Color(0xFFE2E8F0)),
               ),
               child: Text(
                 '${qty}x',
                 style: TextStyle(
-                  fontSize: 10.sp,
+                  fontSize: 9,
                   fontWeight: FontWeight.w900,
                   color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF0F172A),
                 ),
               ),
             ),
-            SizedBox(width: 8.w),
+            SizedBox(width: 6),
             Expanded(
               child: Row(
                 children: [
@@ -1378,7 +1369,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     child: Text(
                       itemName.toString().toUpperCase(),
                       style: TextStyle(
-                        fontSize: 10.5.sp,
+                        fontSize: 10,
                         fontWeight: FontWeight.bold,
                         color: isTicked ? const Color(0xFF94A3B8) : const Color(0xFF334155),
                         decoration: isTicked ? TextDecoration.lineThrough : null,
@@ -1388,17 +1379,17 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     ),
                   ),
                   if (isNewItem && !isTicked) ...[
-                    SizedBox(width: 4.w),
+                    SizedBox(width: 4),
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: 4.w, vertical: 1.h),
+                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
                         color: const Color(0xFF10B981),
-                        borderRadius: BorderRadius.circular(10.r),
+                        borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
                         'NEW',
                         style: TextStyle(
-                          fontSize: 7.sp,
+                          fontSize: 7,
                           fontWeight: FontWeight.w900,
                           color: Colors.white,
                         ),
@@ -1411,13 +1402,13 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             Text(
               '₹${price.toInt()}',
               style: TextStyle(
-                fontSize: 10.5.sp,
+                fontSize: 9,
                 fontWeight: FontWeight.bold,
                 color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF94A3B8),
               ),
             ),
             if (canRemove) ...[
-              SizedBox(width: 6.w),
+              SizedBox(width: 6),
               InkWell(
                 onTap: () {
                   _removeItemFromOrder(order['_id'].toString(), item['_id'].toString()).then((res) {
@@ -1450,17 +1441,17 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     }
                   });
                 },
-                borderRadius: BorderRadius.circular(10.r),
+                borderRadius: BorderRadius.circular(10),
                 child: Container(
-                  width: 16.r,
-                  height: 16.r,
+                  width: 16,
+                  height: 16,
                   decoration: BoxDecoration(
                     color: Colors.red.shade50,
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
                     LucideIcons.x,
-                    size: 9.sp,
+                    size: 9,
                     color: Colors.red.shade400,
                   ),
                 ),
@@ -1472,24 +1463,25 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         // ROW 2: Note tag if present
         if (note.isNotEmpty) ...[
           Padding(
-            padding: EdgeInsets.only(top: 4.h, left: canTick ? 26.w : 0),
+            padding: EdgeInsets.only(top: 4, left: canTick ? 22 : 0),
             child: Container(
-              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
                 color: const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(8.r),
+                borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: const Color(0xFFFED7AA)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('📝', style: TextStyle(fontSize: 10.sp)),
-                  SizedBox(width: 4.w),
+                  Text('📝', style: TextStyle(fontSize: 10)),
+                  SizedBox(width: 4),
                   Flexible(
                     child: Text(
                       note,
                       style: TextStyle(
-                        fontSize: 10.sp,
+                        fontSize: 10,
                         fontWeight: FontWeight.w800,
                         color: isTicked
                             ? const Color(0xFFC2410C).withValues(alpha: 0.5)
@@ -1517,83 +1509,63 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     bool isRestaurant,
   ) {
     if (isReady && !isPayLaterOrder && _activeFilter != 'SERVED') {
+      // Website: grid-cols-3 gap-1 (CASH / UPI / CARD) + grid-cols-2 (Pay Later / Split)
+      void collect(String method) => isRestaurant
+          ? _handleCollectAndServe(order, method)
+          : _handleCollectEarly(order, method);
+      final bool anyPaying = _paymentUpdating != null;
+
       return Column(
         children: [
           Row(
             children: [
-              _buildPaymentButton(
-                icon: Icons.payments_outlined,
-                label: 'CASH',
-                onPressed: () => isRestaurant
-                    ? _handleCollectAndServe(order, 'CASH')
-                    : _handleCollectEarly(order, 'CASH'),
-                isLoading: _paymentUpdating == '${order['_id']}-CASH',
+              _webCardButton(
+                label: _paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH',
+                bg: const Color(0xFFECFDF5),
+                border: const Color(0xFFA7F3D0),
+                fg: const Color(0xFF047857),
+                onPressed: anyPaying ? null : () => collect('CASH'),
               ),
-              SizedBox(width: 6.w),
-              _buildPaymentButton(
-                icon: Icons.qr_code_scanner,
-                label: 'UPI',
-                onPressed: () => isRestaurant
-                    ? _handleCollectAndServe(order, 'UPI')
-                    : _handleCollectEarly(order, 'UPI'),
-                isLoading: _paymentUpdating == '${order['_id']}-UPI',
+              const SizedBox(width: 4),
+              _webCardButton(
+                label: _paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI',
+                bg: const Color(0xFFEFF6FF),
+                border: const Color(0xFFBFDBFE),
+                fg: const Color(0xFF1D4ED8),
+                onPressed: anyPaying ? null : () => collect('UPI'),
               ),
-              SizedBox(width: 6.w),
-              _buildPaymentButton(
-                icon: Icons.credit_card,
-                label: 'CARD',
-                onPressed: () => isRestaurant
-                    ? _handleCollectAndServe(order, 'CARD')
-                    : _handleCollectEarly(order, 'CARD'),
-                isLoading: _paymentUpdating == '${order['_id']}-CARD',
+              const SizedBox(width: 4),
+              _webCardButton(
+                label: _paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD',
+                bg: const Color(0xFFFAF5FF),
+                border: const Color(0xFFE9D5FF),
+                fg: const Color(0xFF7E22CE),
+                onPressed: anyPaying ? null : () => collect('CARD'),
               ),
             ],
           ),
-          SizedBox(height: 6.h),
+          const SizedBox(height: 6),
           Row(
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _initiatePayLater(order),
-                  style: OutlinedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFFFBEB),
-                    foregroundColor: const Color(0xFFD97706),
-                    side: const BorderSide(color: Color(0xFFFDE68A)),
-                    padding: EdgeInsets.symmetric(vertical: 10.h),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r),
-                    ),
-                  ),
-                  child: Text(
-                    _payLaterUpdating == order['_id'] ? '...' : 'Pay Later',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 10.sp,
-                    ),
-                  ),
-                ),
+              _webCardButton(
+                label: _payLaterUpdating == order['_id'] ? 'SAVING...' : 'PAY LATER',
+                bg: const Color(0xFFFFFBEB),
+                border: const Color(0xFFFDE68A),
+                fg: const Color(0xFFD97706),
+                vertical: 6,
+                letterSpacing: 1.6,
+                onPressed: _payLaterUpdating == order['_id']
+                    ? null
+                    : () => _initiatePayLater(order),
               ),
-              SizedBox(width: 6.w),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => setState(() => _splitTarget = order),
-                  style: OutlinedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFAF5FF),
-                    foregroundColor: const Color(0xFF9333EA),
-                    side: const BorderSide(color: Color(0xFFE9D5FF)),
-                    padding: EdgeInsets.symmetric(vertical: 10.h),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r),
-                    ),
-                  ),
-                  child: Text(
-                    'Split',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 10.sp,
-                    ),
-                  ),
-                ),
+              const SizedBox(width: 4),
+              _webCardButton(
+                label: '✂ SPLIT',
+                bg: const Color(0xFFF5F3FF),
+                border: const Color(0xFFDDD6FE),
+                fg: const Color(0xFF7C3AED),
+                vertical: 6,
+                onPressed: () => setState(() => _splitTarget = order),
               ),
             ],
           ),
@@ -1625,9 +1597,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           style: ElevatedButton.styleFrom(
             backgroundColor: buttonBg,
             foregroundColor: Colors.white,
-            padding: EdgeInsets.symmetric(vertical: 14.h),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            minimumSize: const Size(0, 28),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14.r),
+              borderRadius: BorderRadius.circular(8),
             ),
             elevation: 0,
           ),
@@ -1635,8 +1609,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             _statusUpdating == order['_id'] ? '...' : buttonText,
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              fontSize: 11.sp,
-              letterSpacing: 1.w,
+              fontSize: 8,
+              letterSpacing: 0.8,
             ),
           ),
         ),
@@ -1646,10 +1620,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     if (isFullyServed) {
       return Container(
         width: double.infinity,
-        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: const Color(0xFFF0FDF4),
-          borderRadius: BorderRadius.circular(12.r),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFFDCFCE7)),
         ),
         child: Row(
@@ -1661,17 +1635,17 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   Text(
                     '✓ SERVED & PAID',
                     style: TextStyle(
-                      fontSize: 10.sp,
+                      fontSize: 10,
                       fontWeight: FontWeight.w900,
                       color: const Color(0xFF16A34A),
-                      letterSpacing: 1.w,
+                      letterSpacing: 1,
                     ),
                   ),
                   if (order['paymentMethod'] != null && order['paymentMethod'].toString().isNotEmpty)
                     Text(
                       'via ${order['paymentMethod']}',
                       style: TextStyle(
-                        fontSize: 8.5.sp,
+                        fontSize: 8.5,
                         fontWeight: FontWeight.bold,
                         color: const Color(0xFF4ADE80),
                       ),
@@ -1680,7 +1654,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               ),
             ),
             IconButton(
-              icon: Icon(LucideIcons.printer, size: 16.sp, color: const Color(0xFF16A34A)),
+              icon: Icon(LucideIcons.printer, size: 16, color: const Color(0xFF16A34A)),
               onPressed: () => _printOrderBill(order),
               tooltip: 'Reprint Bill',
               padding: EdgeInsets.zero,
@@ -1698,13 +1672,13 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           Text(
             'COLLECT PAYMENT',
             style: TextStyle(
-              fontSize: 8.sp,
+              fontSize: 8,
               fontWeight: FontWeight.w900,
               color: const Color(0xFFD97706),
-              letterSpacing: 1.w,
+              letterSpacing: 1,
             ),
           ),
-          SizedBox(height: 6.h),
+          SizedBox(height: 6),
           Row(
             children: [
               Expanded(
@@ -1713,56 +1687,56 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.amber.shade50,
                     foregroundColor: Colors.amber.shade700,
-                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    padding: EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r),
+                      borderRadius: BorderRadius.circular(10),
                       side: BorderSide(color: Colors.amber.shade200),
                     ),
                     elevation: 0,
                   ),
                   child: Text(
                     _paymentUpdating == '${order['_id']}-CASH' ? '...' : 'CASH',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9.sp),
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9),
                   ),
                 ),
               ),
-              SizedBox(width: 6.w),
+              SizedBox(width: 6),
               Expanded(
                 child: ElevatedButton(
                   onPressed: () => _clearPayLaterPayment(order, 'UPI'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.amber.shade50,
                     foregroundColor: Colors.amber.shade700,
-                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    padding: EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r),
+                      borderRadius: BorderRadius.circular(10),
                       side: BorderSide(color: Colors.amber.shade200),
                     ),
                     elevation: 0,
                   ),
                   child: Text(
                     _paymentUpdating == '${order['_id']}-UPI' ? '...' : 'UPI',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9.sp),
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9),
                   ),
                 ),
               ),
-              SizedBox(width: 6.w),
+              SizedBox(width: 6),
               Expanded(
                 child: ElevatedButton(
                   onPressed: () => _clearPayLaterPayment(order, 'CARD'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.amber.shade50,
                     foregroundColor: Colors.amber.shade700,
-                    padding: EdgeInsets.symmetric(vertical: 10.h),
+                    padding: EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r),
+                      borderRadius: BorderRadius.circular(10),
                       side: BorderSide(color: Colors.amber.shade200),
                     ),
                     elevation: 0,
                   ),
                   child: Text(
                     _paymentUpdating == '${order['_id']}-CARD' ? '...' : 'CARD',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9.sp),
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9),
                   ),
                 ),
               ),
@@ -1910,16 +1884,16 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20.r),
+        // Website: rounded-2xl border-slate-100 shadow-sm
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isPayLaterOrder ? Colors.amber.shade200 : const Color(0xFFE2E8F0),
-          width: 1.r,
+          color: isPayLaterOrder ? Colors.amber.shade200 : const Color(0xFFF1F5F9),
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withAlpha(8),
-            blurRadius: 10.r,
-            offset: Offset(0, 4.h),
+            color: Colors.black.withAlpha(10),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
           ),
         ],
       ),
@@ -1928,16 +1902,16 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 1. Top Stripe Bar (4px height)
+          // 1. Top Stripe Bar (h-1)
           Container(
-            height: 4.h,
+            height: 4,
             width: double.infinity,
             color: stripeColor,
           ),
 
-          // 2. Card Header
+          // 2. Card Header (px-3 pt-3 pb-2)
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1948,18 +1922,18 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                       children: [
                         _buildStatusBadge(status),
                         if (isPayLaterOrder) ...[
-                          SizedBox(width: 6.w),
+                          SizedBox(width: 6),
                           Container(
-                            padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
                               color: const Color(0xFFFFFBEB),
-                              borderRadius: BorderRadius.circular(12.r),
+                              borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: const Color(0xFFFDE68A)),
                             ),
                             child: Text(
                               'PAY LATER',
                               style: TextStyle(
-                                fontSize: 8.sp,
+                                fontSize: 8,
                                 fontWeight: FontWeight.w900,
                                 color: const Color(0xFFD97706),
                               ),
@@ -1972,44 +1946,44 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                       children: [
                         InkWell(
                           onTap: () => setState(() => _viewDetails = order),
-                          borderRadius: BorderRadius.circular(8.r),
+                          borderRadius: BorderRadius.circular(8),
                           child: Padding(
-                            padding: EdgeInsets.all(4.r),
+                            padding: const EdgeInsets.all(4),
                             child: Icon(
                               LucideIcons.user,
-                              size: 15.sp,
-                              color: const Color(0xFF94A3B8),
+                              size: 12,
+                              color: const Color(0xFFCBD5E1),
                             ),
                           ),
                         ),
                         if (!isFullyServed && !isPayLaterOrder && _activeFilter != 'SERVED') ...[
-                          SizedBox(width: 4.w),
+                          SizedBox(width: 4),
                           InkWell(
                             onTap: () => setState(() {
                               _shiftingOrder = order;
                               _newTableValue = order['tableNumber']?.toString() ?? '';
                             }),
-                            borderRadius: BorderRadius.circular(8.r),
+                            borderRadius: BorderRadius.circular(8),
                             child: Padding(
-                              padding: EdgeInsets.all(4.r),
+                              padding: const EdgeInsets.all(4),
                               child: Icon(
                                 LucideIcons.moveRight,
-                                size: 15.sp,
-                                color: const Color(0xFF94A3B8),
+                                size: 12,
+                                color: const Color(0xFFCBD5E1),
                               ),
                             ),
                           ),
                         ],
-                        SizedBox(width: 4.w),
+                        SizedBox(width: 4),
                         InkWell(
                           onTap: () => _cancelOrder(order['_id'].toString()),
-                          borderRadius: BorderRadius.circular(8.r),
+                          borderRadius: BorderRadius.circular(8),
                           child: Padding(
-                            padding: EdgeInsets.all(4.r),
+                            padding: const EdgeInsets.all(4),
                             child: Icon(
                               LucideIcons.trash2,
-                              size: 15.sp,
-                              color: const Color(0xFF94A3B8),
+                              size: 12,
+                              color: const Color(0xFFCBD5E1),
                             ),
                           ),
                         ),
@@ -2017,12 +1991,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     ),
                   ],
                 ),
-                SizedBox(height: 8.h),
+                SizedBox(height: 6),
                 if (!isPayLaterOrder)
                   RichText(
                     text: TextSpan(
                       style: TextStyle(
-                        fontSize: 16.sp,
+                        fontSize: 16,
                         fontWeight: FontWeight.w900,
                         color: const Color(0xFF0F172A),
                       ),
@@ -2034,7 +2008,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           TextSpan(
                             text: ' (${order['tableAreaLabel']})',
                             style: TextStyle(
-                              fontSize: 11.sp,
+                              fontSize: 10,
                               fontWeight: FontWeight.bold,
                               color: const Color(0xFF94A3B8),
                             ),
@@ -2046,26 +2020,26 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   Text(
                     (order['customerName'] ?? 'Guest').toString(),
                     style: TextStyle(
-                      fontSize: 16.sp,
+                      fontSize: 16,
                       fontWeight: FontWeight.w900,
                       color: const Color(0xFF0F172A),
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                SizedBox(height: 4.h),
+                SizedBox(height: 2),
                 Row(
                   children: [
                     Icon(
                       LucideIcons.clock,
-                      size: 11.sp,
+                      size: 9,
                       color: const Color(0xFF94A3B8),
                     ),
-                    SizedBox(width: 4.w),
+                    SizedBox(width: 4),
                     Text(
                       _formatTime(order['createdAt']),
                       style: TextStyle(
-                        fontSize: 10.sp,
+                        fontSize: 9,
                         fontWeight: FontWeight.bold,
                         color: const Color(0xFF94A3B8),
                       ),
@@ -2076,11 +2050,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             ),
           ),
 
-          // 3. Items List
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+          // 3. Items List (website: flex-grow, fills equal-height rows)
+          Expanded(
+           child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: const BoxDecoration(
-              color: Color(0xFFF8FAFC),
+              color: Color(0x80F8FAFC),
               border: Border.symmetric(
                 horizontal: BorderSide(
                   color: Color(0xFFF1F5F9),
@@ -2092,7 +2067,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: 150.h),
+                  constraints: BoxConstraints(maxHeight: 150),
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2101,20 +2076,20 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         if (items is List)
                           for (int iIdx = 0; iIdx < items.length; iIdx++) ...[
                             _buildOrderItemRow(order, items[iIdx], isPayLaterOrder),
-                            if (iIdx < items.length - 1) SizedBox(height: 6.h),
+                            if (iIdx < items.length - 1) SizedBox(height: 6),
                           ],
                       ],
                     ),
                   ),
                 ),
                 if (!isFullyServed && !isPayLaterOrder && !isReady && _activeFilter != 'SERVED') ...[
-                  SizedBox(height: 8.h),
+                  SizedBox(height: 4),
                   CustomPaint(
                     painter: DashedRectPainter(
-                      color: const Color(0xFFCBD5E1),
-                      strokeWidth: 1.r,
-                      gap: 4.w,
-                      borderRadius: 12.r,
+                      color: const Color(0xFFE2E8F0),
+                      strokeWidth: 1,
+                      gap: 4,
+                      borderRadius: 12,
                     ),
                     child: InkWell(
                       onTap: () {
@@ -2126,27 +2101,27 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         });
                         _scaffoldKey.currentState?.openEndDrawer();
                       },
-                      borderRadius: BorderRadius.circular(12.r),
+                      borderRadius: BorderRadius.circular(12),
                       child: Container(
                         width: double.infinity,
-                        padding: EdgeInsets.symmetric(vertical: 8.h),
+                        padding: const EdgeInsets.symmetric(vertical: 6),
                         alignment: Alignment.center,
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               LucideIcons.plus,
-                              size: 12.sp,
+                              size: 10,
                               color: const Color(0xFF94A3B8),
                             ),
-                            SizedBox(width: 4.w),
+                            SizedBox(width: 4),
                             Text(
-                              '+ ADD ITEMS',
+                              'ADD ITEMS',
                               style: TextStyle(
-                                fontSize: 9.sp,
+                                fontSize: 8,
                                 fontWeight: FontWeight.w900,
                                 color: const Color(0xFF94A3B8),
-                                letterSpacing: 1.w,
+                                letterSpacing: 1,
                               ),
                             ),
                           ],
@@ -2158,10 +2133,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               ],
             ),
           ),
+          ),
 
-          // 4. Card Footer
+          // 4. Card Footer (px-3 py-3)
           Padding(
-            padding: EdgeInsets.all(14.r),
+            padding: const EdgeInsets.all(12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2171,25 +2147,25 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     final totalItems = (items is List) ? items.length : 0;
                     if (done > 0 && totalItems > 0) {
                       return Padding(
-                        padding: EdgeInsets.only(bottom: 8.h),
+                        padding: EdgeInsets.only(bottom: 8),
                         child: Row(
                           children: [
                             Expanded(
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(4.r),
+                                borderRadius: BorderRadius.circular(4),
                                 child: LinearProgressIndicator(
                                   value: done / totalItems,
-                                  minHeight: 4.h,
+                                  minHeight: 4,
                                   backgroundColor: const Color(0xFFF1F5F9),
                                   valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
                                 ),
                               ),
                             ),
-                            SizedBox(width: 8.w),
+                            SizedBox(width: 8),
                             Text(
                               '$done/$totalItems served',
                               style: TextStyle(
-                                fontSize: 8.5.sp,
+                                fontSize: 8.5,
                                 fontWeight: FontWeight.w900,
                                 color: const Color(0xFF10B981),
                               ),
@@ -2207,23 +2183,23 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                     Text(
                       'TOTAL',
                       style: TextStyle(
-                        fontSize: 9.sp,
+                        fontSize: 8,
                         fontWeight: FontWeight.w900,
-                        color: const Color(0xFF94A3B8),
-                        letterSpacing: 2.w,
+                        color: const Color(0xFFCBD5E1),
+                        letterSpacing: 2,
                       ),
                     ),
                     Text(
                       '₹${total.toInt()}',
                       style: TextStyle(
-                        fontSize: 20.sp,
+                        fontSize: 18,
                         fontWeight: FontWeight.w900,
                         color: const Color(0xFF0F172A),
                       ),
                     ),
                   ],
                 ),
-                SizedBox(height: 12.h),
+                SizedBox(height: 8),
                 _buildCardActionButtons(order, status, isReady, isFullyServed, isPayLaterOrder, isRestaurant),
               ],
             ),
@@ -2730,7 +2706,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       });
     }
 
-    final isMobile = MediaQuery.of(context).size.width < 768;
+    final isMobile = !Responsive.useDesktopLayout(context);
 
     if (_activeFilter == 'LIVE') {
       _activeFilter = 'All';
@@ -2823,9 +2799,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     return Scaffold(
       key: _scaffoldKey,
       endDrawer: SizedBox(
-        width: MediaQuery.of(context).size.width >= 768
-            ? math.min(740.0, MediaQuery.of(context).size.width * 0.75)
-            : MediaQuery.of(context).size.width,
+        width: Responsive.endDrawerWidth(context),
         child: Drawer(
           elevation: 16,
           child: MenuModal(
@@ -3069,10 +3043,11 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 ),
                                 SizedBox(width: 16.w),
                                 Container(
-                                  width: 250.w,
+                                  // Website: w-64 py-2.5 rounded-xl border-slate-200
+                                  width: 256,
                                   decoration: BoxDecoration(
                                     color: Colors.white,
-                                    borderRadius: BorderRadius.circular(12.r),
+                                    borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
                                       color: const Color(0xFFE2E8F0),
                                     ),
@@ -3080,20 +3055,29 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   child: TextField(
                                     onChanged: (val) =>
                                         setState(() => _searchQuery = val),
-                                    decoration: InputDecoration(
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    decoration: const InputDecoration(
+                                      isDense: true,
                                       hintText: 'Search name or table...',
                                       hintStyle: TextStyle(
-                                        color: const Color(0xFF94A3B8),
-                                        fontSize: 13.sp,
+                                        color: Color(0xFF94A3B8),
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                       prefixIcon: Icon(
                                         LucideIcons.search,
-                                        size: 18.sp,
-                                        color: const Color(0xFF94A3B8),
+                                        size: 18,
+                                        color: Color(0xFF94A3B8),
+                                      ),
+                                      prefixIconConstraints: BoxConstraints(
+                                        minWidth: 40,
                                       ),
                                       border: InputBorder.none,
                                       contentPadding: EdgeInsets.symmetric(
-                                        vertical: 14.h,
+                                        vertical: 10,
                                       ),
                                     ),
                                   ),
@@ -3488,7 +3472,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         isMobile ? 16.0.w : 24.0.w,
                         isMobile ? 16.0.h : 24.0.h,
                       ),
-                      sliver: isMobile
+                      sliver: isMobile && isPayLaterTab
                           ? SliverList(
                               delegate: SliverChildBuilderDelegate(
                                 (context, index) {
@@ -3510,15 +3494,28 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 childCount: currentList.length,
                               ),
                             )
-                          : SliverGrid(
-                              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                                maxCrossAxisExtent: 420.w,
-                                mainAxisSpacing: 24.h,
-                                crossAxisSpacing: 24.w,
-                                childAspectRatio: isPayLaterTab ? 0.50 : (isFoodTruck ? 0.76 : 0.64),
-                              ),
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
+                          // Cards are laid out in rows (like the website's CSS
+                          // grid): every card in a row gets the row's height.
+                          : SliverLayoutBuilder(
+                              builder: (context, sliverConstraints) {
+                                final screenW = MediaQuery.sizeOf(context).width;
+                                final double gap = isPayLaterTab ? 24 : (screenW < 768 ? 12 : 16);
+                                // Pay-later: website grid-cols-1 sm:2 lg:3.
+                                // Orders: website cards are ~190–260px wide
+                                // (grid-cols-2 … 2xl:5), so fit as many
+                                // columns of ≥190px as the space allows.
+                                final int columns = isPayLaterTab
+                                    ? (screenW < 640 ? 1 : screenW < 1024 ? 2 : 3)
+                                    : ((sliverConstraints.crossAxisExtent + gap) / (190 + gap))
+                                        .floor()
+                                        .clamp(2, 5);
+                                // Equal-height rows only for restaurant order
+                                // cards (their item section flex-grows).
+                                final bool equalHeight = !isPayLaterTab && !isFoodTruck;
+                                final rowCount =
+                                    (currentList.length / columns).ceil();
+
+                                Widget buildCard(int index) {
                                   if (isPayLaterTab) {
                                     return _buildPayLaterCustomerCard(context, groupedPayLater[index]);
                                   }
@@ -3527,9 +3524,37 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   return isFoodTruck
                                       ? _buildFoodTruckOrderCard(context, order)
                                       : _buildOrderCard(context, order, authState);
-                                },
-                                childCount: currentList.length,
-                              ),
+                                }
+
+                                return SliverList(
+                                  delegate: SliverChildBuilderDelegate(
+                                    (context, row) {
+                                      final rowWidget = Row(
+                                        crossAxisAlignment: equalHeight
+                                            ? CrossAxisAlignment.stretch
+                                            : CrossAxisAlignment.start,
+                                        children: [
+                                          for (int col = 0; col < columns; col++) ...[
+                                            if (col > 0) SizedBox(width: gap),
+                                            Expanded(
+                                              child: row * columns + col < currentList.length
+                                                  ? buildCard(row * columns + col)
+                                                  : const SizedBox.shrink(),
+                                            ),
+                                          ],
+                                        ],
+                                      );
+                                      return Padding(
+                                        padding: EdgeInsets.only(bottom: gap),
+                                        child: equalHeight
+                                            ? IntrinsicHeight(child: rowWidget)
+                                            : rowWidget,
+                                      );
+                                    },
+                                    childCount: rowCount,
+                                  ),
+                                );
+                              },
                             ),
                     ),
             ],

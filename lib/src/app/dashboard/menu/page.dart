@@ -7,6 +7,7 @@ import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
 import 'package:dio/dio.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../../utils/responsive.dart';
 
 class MenuPage extends ConsumerStatefulWidget {
   const MenuPage({super.key});
@@ -1072,7 +1073,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                 // Desktop Category Sidebar
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    final isDesktop = MediaQuery.of(context).size.width >= 768;
+                    final isDesktop = Responsive.useDesktopLayout(context);
                     if (!isDesktop) return const SizedBox.shrink();
                     return _buildCategoryDrawerConfig(isDrawer: false);
                   },
@@ -2165,7 +2166,7 @@ class _MenuPageState extends ConsumerState<MenuPage> {
 
   Widget _buildCategoryDrawerConfig({required bool isDrawer}) {
     return Container(
-      width: isDrawer ? null : 260.0,
+      width: isDrawer ? null : Responsive.sidePaneWidth(context, 260.0),
       height: double.infinity,
       padding: EdgeInsets.all(24.r),
       decoration: BoxDecoration(
@@ -2364,7 +2365,10 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                     color: isActive ? Colors.white70 : Colors.grey,
                     size: 14.sp,
                   ),
-                  constraints: const BoxConstraints(),
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  style: IconButton.styleFrom(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                   padding: EdgeInsets.zero,
                   splashRadius: 16,
                 ),
@@ -2376,7 +2380,10 @@ class _MenuPageState extends ConsumerState<MenuPage> {
                     color: isActive ? Colors.white70 : Colors.grey,
                     size: 14.sp,
                   ),
-                  constraints: const BoxConstraints(),
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  style: IconButton.styleFrom(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                   padding: EdgeInsets.zero,
                   splashRadius: 16,
                 ),

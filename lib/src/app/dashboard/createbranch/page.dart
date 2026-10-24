@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import 'package:go_router/go_router.dart';
+import '../../../utils/responsive.dart';
 
 class CreateBranchPage extends ConsumerStatefulWidget {
   const CreateBranchPage({super.key});
@@ -158,7 +159,7 @@ class _CreateBranchPageState extends ConsumerState<CreateBranchPage> {
                   children: [
                     LayoutBuilder(
                       builder: (ctx, constraints) {
-                        if (MediaQuery.of(context).size.width >= 768) {
+                        if (Responsive.useDesktopLayout(context)) {
                           return const SizedBox.shrink();
                         }
                         return Padding(
@@ -242,7 +243,7 @@ class _CreateBranchPageState extends ConsumerState<CreateBranchPage> {
                 // Left Pane: Registry Form (Desktop)
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    if (MediaQuery.of(context).size.width < 768) {
+                    if (!Responsive.useDesktopLayout(context)) {
                       return const SizedBox.shrink();
                     }
                     return _buildFormPane();
@@ -518,7 +519,9 @@ class _CreateBranchPageState extends ConsumerState<CreateBranchPage> {
 
   Widget _buildFormPane({bool isDrawer = false}) {
     return Container(
-      width: isDrawer ? double.infinity : 450.w,
+      width: isDrawer
+          ? double.infinity
+          : Responsive.sidePaneWidth(context, 450.w),
       padding: EdgeInsets.all(isDrawer ? 24.r : 40.r),
       decoration: BoxDecoration(
         color: Colors.white,

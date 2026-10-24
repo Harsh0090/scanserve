@@ -9,6 +9,7 @@ import '../../../utils/apiClient.dart';
 import '../../components/MenuModal.dart';
 import '../../context/AuthContext.dart';
 import '../../../services/kot_print_service.dart';
+import '../../../utils/responsive.dart';
 
 class OwnerSetupPage extends ConsumerStatefulWidget {
   const OwnerSetupPage({super.key});
@@ -2298,9 +2299,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8FAFB),
       endDrawer: SizedBox(
-        width: MediaQuery.of(context).size.width >= 768
-            ? math.min(740.0, MediaQuery.of(context).size.width * 0.75)
-            : MediaQuery.of(context).size.width,
+        width: Responsive.endDrawerWidth(context),
         child: Drawer(
           elevation: 16,
           child: MenuModal(
@@ -2325,7 +2324,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                 // Header
                 LayoutBuilder(
                   builder: (ctx, constraints) {
-                    final isMobile = MediaQuery.of(context).size.width < 768;
+                    final isMobile = !Responsive.useDesktopLayout(context);
                     return Wrap(
                       alignment: WrapAlignment.spaceBetween,
                       crossAxisAlignment: WrapCrossAlignment.center,

@@ -49,17 +49,19 @@ class RootLayout extends ConsumerWidget {
     ref.watch(trialProvider);
     ref.watch(onboardingProvider);
 
-    // Use LayoutBuilder to pick the design size based on actual screen width.
-    // Tablet breakpoint: 768dp and above → use 1024×768 design canvas.
-    // Phone (< 768dp) keeps the original 402×885 canvas.
+    // Pick a design canvas that matches the device class AND orientation so
+    // .w / .h / .sp scale roughly uniformly. Using the portrait phone canvas
+    // on a rotated phone stretched widths ×2 and squashed heights ×0.5.
+    //  • Tablet (shortest side ≥ 600): 768×1024 portrait / 1024×768 landscape
+    //  • Phone: 402×885 portrait / 885×402 landscape
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isTablet = constraints.maxWidth >= 768;
+        final isTablet = constraints.biggest.shortestSide >= 600;
         final isLandscape = constraints.maxWidth > constraints.maxHeight;
         return ScreenUtilInit(
           designSize: isTablet
               ? (isLandscape ? const Size(1024, 768) : const Size(768, 1024))
-              : const Size(402, 885),
+              : (isLandscape ? const Size(885, 402) : const Size(402, 885)),
           minTextAdapt: true,
           splitScreenMode: true,
           builder: (_, child) {

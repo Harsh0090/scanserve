@@ -117,7 +117,9 @@ class RevenueChart extends StatelessWidget {
       if (s > maxY) maxY = s;
       if (u > maxY) maxY = u;
     }
-    maxY = maxY == 0 ? 100 : maxY * 1.2;
+    // Round the axis to a "nice" step so labels never repeat (e.g. 2k, 2k).
+    final step = _niceStep(maxY == 0 ? 100 : maxY * 1.1 / 4);
+    maxY = step * 4;
 
     return LineChart(
       LineChartData(
@@ -126,7 +128,7 @@ class RevenueChart extends StatelessWidget {
         gridData: FlGridData(
           show: true,
           drawVerticalLine: false,
-          horizontalInterval: maxY / 4,
+          horizontalInterval: step,
           getDrawingHorizontalLine: (v) =>
               FlLine(color: const Color(0xFFF1F5F9), strokeWidth: 1),
         ),
@@ -141,6 +143,7 @@ class RevenueChart extends StatelessWidget {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 40,
+              interval: step,
               getTitlesWidget: (v, _) => Text(
                 _fmtK(v),
                 style: const TextStyle(
@@ -216,8 +219,23 @@ class RevenueChart extends StatelessWidget {
   );
 
   String _fmtK(double v) {
-    if (v >= 1000) return '${(v / 1000).toStringAsFixed(0)}k';
+    if (v >= 1000) {
+      final k = v / 1000;
+      return '${k == k.roundToDouble() ? k.toStringAsFixed(0) : k.toStringAsFixed(1)}k';
+    }
     return v.toStringAsFixed(0);
+  }
+
+  /// Rounds [raw] up to 1, 2, 2.5 or 5 × 10ⁿ.
+  double _niceStep(double raw) {
+    double magnitude = 1;
+    while (magnitude * 10 <= raw) {
+      magnitude *= 10;
+    }
+    for (final m in [1.0, 2.0, 2.5, 5.0, 10.0]) {
+      if (m * magnitude >= raw) return m * magnitude;
+    }
+    return 10 * magnitude;
   }
 }
 

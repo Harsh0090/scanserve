@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../utils/apiClient.dart';
 import '../../context/AuthContext.dart';
+import '../../../utils/responsive.dart';
 
 class InventoryPage extends ConsumerStatefulWidget {
   const InventoryPage({super.key});
@@ -142,7 +143,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     int lowStockCount = _items.where((i) => (i['currentStock'] ?? 0) <= (i['lowStockThreshold'] ?? 0)).length;
     double totalValue = _items.fold(0, (sum, i) => sum + ((i['currentStock'] ?? 0) * (i['costPerUnit'] ?? 0)));
 
-    final isMobile = MediaQuery.of(context).size.width < 768;
+    final isMobile = !Responsive.useDesktopLayout(context);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
