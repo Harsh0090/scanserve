@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../utils/apiClient.dart';
 import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
@@ -36,37 +38,104 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   // Track newly added items for "New" badge
   final Map<String, List<String>> _newlyAddedItems = {};
 
-  // Track served/ticked items per order (orderId -> Set of item/line IDs)
-  final Map<String, Set<String>> _servedItems = {};
+  // Track served/ticked items per order (orderId -> { lineId: qty ticked })
+  // Same shape as website: an item counts as ticked only while ticked qty >= current quantity
+  Map<String, Map<String, num>> _servedItems = {};
 
-  bool _isItemServed(String orderId, String lineId) {
-    return _servedItems[orderId]?.contains(lineId) ?? false;
+  // Same localStorage key as website, persisted via SharedPreferences
+  String? _paymentStorageKey;
+  bool _paymentStateLoaded = false;
+
+  String _lineIdOf(dynamic item) {
+    if (item is! Map) return '';
+    final itemData = item['item'];
+    return (item['_id'] ??
+            (itemData is Map ? itemData['_id'] : null) ??
+            (itemData is Map ? itemData['branchName'] : null) ??
+            item['name'] ??
+            '')
+        .toString();
   }
 
-  void _toggleItemServed(String orderId, String lineId) {
+  num _qtyOf(dynamic item) =>
+      (item is Map ? num.tryParse((item['quantity'] ?? 1).toString()) : null) ?? 1;
+
+  bool _isItemServed(String orderId, dynamic item) {
+    final servedQty = _servedItems[orderId]?[_lineIdOf(item)] ?? 0;
+    return servedQty >= _qtyOf(item);
+  }
+
+  void _toggleItemServed(String orderId, dynamic item) {
     setState(() {
-      final set = _servedItems[orderId] ?? <String>{};
-      if (set.contains(lineId)) {
-        set.remove(lineId);
+      final lineId = _lineIdOf(item);
+      final orderMap = Map<String, num>.from(_servedItems[orderId] ?? {});
+      final isDone = (orderMap[lineId] ?? 0) >= _qtyOf(item);
+
+      if (isDone) {
+        orderMap.remove(lineId);
       } else {
-        set.add(lineId);
+        orderMap[lineId] = _qtyOf(item);
       }
-      _servedItems[orderId] = set;
+
+      final next = Map<String, Map<String, num>>.from(_servedItems);
+      if (orderMap.isNotEmpty) {
+        next[orderId] = orderMap;
+      } else {
+        next.remove(orderId);
+      }
+      _servedItems = next;
     });
+    _savePaymentState();
   }
 
   int _getServedCount(dynamic order) {
     final orderId = (order is Map ? order['_id'] : null)?.toString() ?? '';
     final items = (order is Map) ? order['items'] : null;
     if (items is! List) return 0;
-    int count = 0;
-    for (var i in items) {
-      if (i is Map) {
-        final lineId = (i['_id'] ?? i['item']?['_id'] ?? '').toString();
-        if (_isItemServed(orderId, lineId)) count++;
+    return items.where((i) => _isItemServed(orderId, i)).length;
+  }
+
+  // 1) Page load par saved state wapas lao
+  Future<void> _loadPaymentState(String restaurantId) async {
+    _paymentStorageKey = 'liveOrdersPaymentState:$restaurantId';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_paymentStorageKey!);
+      final saved = raw != null ? jsonDecode(raw) : {};
+      final servedRaw = saved is Map ? saved['servedItems'] : null;
+      if (servedRaw is Map) {
+        final parsed = <String, Map<String, num>>{};
+        servedRaw.forEach((orderId, lines) {
+          if (lines is! Map) return;
+          final orderMap = <String, num>{};
+          lines.forEach((lineId, qty) {
+            final q = num.tryParse(qty.toString());
+            if (q != null) orderMap[lineId.toString()] = q;
+          });
+          if (orderMap.isNotEmpty) parsed[orderId.toString()] = orderMap;
+        });
+        if (mounted) setState(() => _servedItems = parsed);
       }
+    } catch (e) {
+      debugPrint("Failed to load payment state: $e");
     }
-    return count;
+    _paymentStateLoaded = true;
+  }
+
+  // 2) Jab bhi change ho, save karo
+  Future<void> _savePaymentState() async {
+    if (_paymentStorageKey == null || !_paymentStateLoaded) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // Merge so other fields stored under this key (pickupDiscounts etc.) are kept
+      final raw = prefs.getString(_paymentStorageKey!);
+      final decoded = raw != null ? jsonDecode(raw) : null;
+      final saved = decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+      saved['servedItems'] = _servedItems;
+      await prefs.setString(_paymentStorageKey!, jsonEncode(saved));
+    } catch (e) {
+      debugPrint("Failed to save payment state: $e");
+    }
   }
 
   // Pay Later partial amounts and state
@@ -120,9 +189,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     super.dispose();
   }
 
+  // initState and build can both schedule init; guard so it runs only once
+  bool _initStarted = false;
+
   Future<void> _initRoleAndData() async {
     final rawUser = ref.read(authProvider).user;
-    if (rawUser == null || _socket != null) return; // Already init or no user
+    if (rawUser == null || _socket != null || _initStarted) return; // Already init or no user
 
     // Robust recovery of restaurantId from different session types
     final String? restaurantId =
@@ -136,12 +208,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       return;
     }
 
+    _initStarted = true;
     if (mounted) {
       setState(() {
         _activeFilter = 'All';
       });
     }
 
+    await _loadPaymentState(restaurantId);
     _setupSocket(restaurantId);
     await _fetchOrders();
     await _fetchPayLaterOrders();
@@ -1303,7 +1377,6 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final price = itemPrice * qty;
 
     final orderId = order['_id']?.toString() ?? '';
-    final lineId = (item['_id'] ?? (itemData is Map ? itemData['_id'] : null) ?? itemName).toString();
     final itemId = (itemData is Map ? itemData['_id'] : item['_id'])?.toString();
     final isNewItem = _newlyAddedItems[orderId]?.contains(itemId) == true;
 
@@ -1314,7 +1387,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         _activeFilter != 'SERVED';
 
     final canTick = canRemove;
-    final isTicked = _isItemServed(orderId, lineId);
+    final isTicked = _isItemServed(orderId, item);
     final note = (item['note'] ??
             item['notes'] ??
             item['instruction'] ??
@@ -1334,7 +1407,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           children: [
             if (canTick) ...[
               GestureDetector(
-                onTap: () => _toggleItemServed(orderId, lineId),
+                onTap: () => _toggleItemServed(orderId, item),
                 child: Container(
                   width: 18.r,
                   height: 18.r,
