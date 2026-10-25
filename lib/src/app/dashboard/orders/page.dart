@@ -12,6 +12,7 @@ import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import '../../components/menu_modal_route.dart';
 import '../../../services/kot_print_service.dart';
+import '../../../utils/served_ticks.dart';
 import '../../../services/auto_kot_print_service.dart';
 import '../../../utils/responsive.dart';
 
@@ -47,35 +48,21 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   String? _paymentStorageKey;
   bool _paymentStateLoaded = false;
 
-  String _lineIdOf(dynamic item) {
-    if (item is! Map) return '';
-    final itemData = item['item'];
-    return (item['_id'] ??
-            (itemData is Map ? itemData['_id'] : null) ??
-            (itemData is Map ? itemData['branchName'] : null) ??
-            item['name'] ??
-            '')
-        .toString();
-  }
+  num _qtyOf(dynamic item) => qtyOf(item);
 
-  num _qtyOf(dynamic item) =>
-      (item is Map ? num.tryParse((item['quantity'] ?? 1).toString()) : null) ?? 1;
+  // Website getItemRounds() / tick rule, shared with Table Management.
+  List<ItemRound> _getItemRounds(dynamic item) => getItemRounds(item);
 
-  bool _isItemServed(String orderId, dynamic item) {
-    final servedQty = _servedItems[orderId]?[_lineIdOf(item)] ?? 0;
-    return servedQty >= _qtyOf(item);
-  }
+  bool _isRoundServed(String orderId, ItemRound r) =>
+      isRoundServed(_servedItems, orderId, r);
 
-  void _toggleItemServed(String orderId, dynamic item) {
+  void _toggleRoundServed(String orderId, ItemRound r) {
     setState(() {
-      final lineId = _lineIdOf(item);
       final orderMap = Map<String, num>.from(_servedItems[orderId] ?? {});
-      final isDone = (orderMap[lineId] ?? 0) >= _qtyOf(item);
-
-      if (isDone) {
-        orderMap.remove(lineId);
+      if ((orderMap[r.key] ?? 0) >= r.qty) {
+        orderMap.remove(r.key);
       } else {
-        orderMap[lineId] = _qtyOf(item);
+        orderMap[r.key] = r.qty;
       }
 
       final next = Map<String, Map<String, num>>.from(_servedItems);
@@ -89,11 +76,20 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     _savePaymentState();
   }
 
-  int _getServedCount(dynamic order) {
+  // Website getServedStats(): counts rows (rounds), not just items.
+  ({int done, int all}) _getServedStats(dynamic order) {
     final orderId = (order is Map ? order['_id'] : null)?.toString() ?? '';
     final items = (order is Map) ? order['items'] : null;
-    if (items is! List) return 0;
-    return items.where((i) => _isItemServed(orderId, i)).length;
+    if (items is! List) return (done: 0, all: 0);
+    int done = 0, all = 0;
+    for (final item in items) {
+      if (item is! Map) continue;
+      for (final r in _getItemRounds(item)) {
+        all++;
+        if (_isRoundServed(orderId, r)) done++;
+      }
+    }
+    return (done: done, all: all);
   }
 
   // 1) Page load par saved state wapas lao
@@ -1386,17 +1382,76 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     );
   }
 
+  // Merge the server's updated order into the local list (or drop it when the
+  // backend cancelled it because its last item was removed).
+  void _applyOrderUpdate(String orderId, dynamic res) {
+    setState(() {
+      final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
+      final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId);
+      if (idx != -1) {
+        if (res is Map && res['cancelled'] == true) {
+          _orders.removeAt(idx);
+        } else if (updatedOrder is Map) {
+          _orders[idx] = {
+            ..._orders[idx] as Map,
+            'items': updatedOrder['items'],
+            'estimatedTotal': updatedOrder['estimatedTotal'],
+            'subTotal': updatedOrder['subTotal'],
+          };
+        }
+      }
+    });
+  }
+
+  // Website ✕ button: a single-round item removes the whole line (as before);
+  // for a multi-round item the ✕ sits only on the newest round and cuts just
+  // that round's quantity.
+  Future<void> _removeRound(dynamic order, Map item, ItemRound r) async {
+    final orderId = order['_id'].toString();
+    try {
+      if (!r.isRound) {
+        final res = await _removeItemFromOrder(orderId, item['_id'].toString());
+        if (!mounted) return;
+        _applyOrderUpdate(orderId, res);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Item removed')),
+        );
+      } else {
+        final res = await apiFetch(
+          '/api/orders/$orderId/update-item',
+          method: 'PATCH',
+          data: {
+            'lineId': item['_id'],
+            'quantity': _qtyOf(item) - r.qty,
+            'skipAutoPrint': true,
+          },
+        );
+        if (!mounted) return;
+        _applyOrderUpdate(orderId, res);
+        setState(() {
+          final orderMap = Map<String, num>.from(_servedItems[orderId] ?? {});
+          orderMap.remove(r.key);
+          _servedItems = {..._servedItems, orderId: orderMap};
+        });
+        _savePaymentState();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${r.qty}x removed')),
+        );
+      }
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $err')),
+        );
+      }
+    }
+  }
+
   Widget _buildOrderItemRow(dynamic order, dynamic item, bool isPayLaterOrder) {
     if (item is! Map) return const SizedBox.shrink();
     final itemData = item['item'];
     final itemName = (itemData is Map ? itemData['branchName'] : null) ?? item['name'] ?? '';
-    final itemPrice = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? item['basePrice'] ?? 0).toString()) ?? 0;
-    final qty = num.tryParse((item['quantity'] ?? 1).toString()) ?? 1;
-    final price = itemPrice * qty;
-
-    final orderId = order['_id']?.toString() ?? '';
-    final itemId = (itemData is Map ? itemData['_id'] : item['_id'])?.toString();
-    final isNewItem = _newlyAddedItems[orderId]?.contains(itemId) == true;
+    final unitPrice = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? item['basePrice'] ?? 0).toString()) ?? 0;
 
     final canRemove = order['status'] != 'SERVED' &&
         order['status'] != 'CANCELLED' &&
@@ -1405,7 +1460,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         _activeFilter != 'SERVED';
 
     final canTick = canRemove;
-    final isTicked = _isItemServed(orderId, item);
+    final rounds = _getItemRounds(item);
     final note = (item['note'] ??
             item['notes'] ??
             item['instruction'] ??
@@ -1418,184 +1473,202 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         .toString()
         .trim();
 
+    // Website: space-y-1 between the rounds of one item, note once under all rounds.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            if (canTick) ...[
-              GestureDetector(
-                onTap: () => _toggleItemServed(orderId, item),
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: isTicked ? const Color(0xFF10B981) : Colors.white,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: isTicked ? const Color(0xFF10B981) : const Color(0xFFCBD5E1),
-                      width: 1.5,
-                    ),
-                  ),
-                  alignment: Alignment.center,
-                  child: isTicked
-                      ? Icon(LucideIcons.check, size: 11, color: Colors.white)
-                      : null,
-                ),
-              ),
-              SizedBox(width: 6),
-            ],
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
-              ),
-              child: Text(
-                '${qty}x',
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w900,
-                  color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF0F172A),
-                ),
-              ),
-            ),
-            SizedBox(width: 6),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      itemName.toString().toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: isTicked ? const Color(0xFF94A3B8) : const Color(0xFF334155),
-                        decoration: isTicked ? TextDecoration.lineThrough : null,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (isNewItem && !isTicked) ...[
-                    SizedBox(width: 4),
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF10B981),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        'NEW',
-                        style: TextStyle(
-                          fontSize: 7,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            Text(
-              '₹${price.toInt()}',
-              style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.bold,
-                color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF94A3B8),
-              ),
-            ),
-            if (canRemove) ...[
-              SizedBox(width: 6),
-              InkWell(
-                onTap: () {
-                  _removeItemFromOrder(order['_id'].toString(), item['_id'].toString()).then((res) {
-                    setState(() {
-                      final updatedOrder = (res is Map && res['order'] != null) ? res['order'] : res;
-                      final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == order['_id'].toString());
-                      if (idx != -1) {
-                        if (res is Map && res['cancelled'] == true) {
-                          _orders.removeAt(idx);
-                        } else {
-                          _orders[idx] = {
-                            ..._orders[idx] as Map,
-                            'items': updatedOrder['items'],
-                            'estimatedTotal': updatedOrder['estimatedTotal'],
-                            'subTotal': updatedOrder['subTotal'],
-                          };
-                        }
-                      }
-                    });
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Item removed')),
-                      );
-                    }
-                  }).catchError((err) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Failed: $err')),
-                      );
-                    }
-                  });
-                },
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    LucideIcons.x,
-                    size: 9,
-                    color: Colors.red.shade400,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
+        for (int i = 0; i < rounds.length; i++) ...[
+          if (i > 0) const SizedBox(height: 4),
+          _buildRoundRow(
+            order: order,
+            item: item,
+            r: rounds[i],
+            itemName: itemName.toString(),
+            unitPrice: unitPrice,
+            canTick: canTick,
+            canRemove: canRemove,
+          ),
+        ],
 
-        // ROW 2: Note tag if present
-        if (note.isNotEmpty) ...[
+        if (note.isNotEmpty)
           Padding(
-            padding: EdgeInsets.only(top: 4, left: canTick ? 22 : 0),
+            padding: const EdgeInsets.only(top: 4, left: 22),
             child: Container(
               width: double.infinity,
-              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: const Color(0xFFFFF7ED),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: const Color(0xFFFED7AA)),
               ),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('📝', style: TextStyle(fontSize: 10)),
-                  SizedBox(width: 4),
-                  Flexible(
+                  const Text('📝', style: TextStyle(fontSize: 9)),
+                  const SizedBox(width: 4),
+                  Expanded(
                     child: Text(
                       note,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: isTicked
-                            ? const Color(0xFFC2410C).withValues(alpha: 0.5)
-                            : const Color(0xFFC2410C),
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFC2410C),
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
               ),
             ),
           ),
-        ],
+      ],
+    );
+  }
+
+  Widget _buildRoundRow({
+    required dynamic order,
+    required Map item,
+    required ItemRound r,
+    required String itemName,
+    required num unitPrice,
+    required bool canTick,
+    required bool canRemove,
+  }) {
+    final orderId = order['_id']?.toString() ?? '';
+    final isTicked = _isRoundServed(orderId, r);
+    final showNew = r.isRound && r.index > 0 && !isTicked;
+    final roundTime = r.isRound && r.at != null ? _formatTime(r.at).toLowerCase() : '';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (canTick) ...[
+                GestureDetector(
+                  onTap: () => _toggleRoundServed(orderId, r),
+                  child: Container(
+                    margin: const EdgeInsets.only(top: 2),
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: isTicked ? const Color(0xFF10B981) : Colors.white,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: isTicked ? const Color(0xFF10B981) : const Color(0xFFCBD5E1),
+                        width: 2,
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: isTicked
+                        ? const Icon(LucideIcons.check, size: 10, color: Colors.white)
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Container(
+                margin: const EdgeInsets.only(top: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Text(
+                  '${r.qty}x',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                    color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF0F172A),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text.rich(
+                        TextSpan(
+                          text: itemName.toUpperCase(),
+                          children: [
+                            if (showNew)
+                              const WidgetSpan(
+                                alignment: PlaceholderAlignment.middle,
+                                child: Padding(
+                                  padding: EdgeInsets.only(left: 6),
+                                  child: _PulsingNewBadge(),
+                                ),
+                              ),
+                          ],
+                        ),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          height: 1.25,
+                          color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+                          decoration: isTicked ? TextDecoration.lineThrough : null,
+                        ),
+                      ),
+                      if (roundTime.isNotEmpty)
+                        Text(
+                          roundTime,
+                          style: const TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.bold,
+                            height: 1.25,
+                            color: Color(0xFF94A3B8),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '₹${(unitPrice * r.qty).toInt()}',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: isTicked ? const Color(0xFFCBD5E1) : const Color(0xFF94A3B8),
+                ),
+              ),
+              // ✕: single-round item → whole line; multi-round → newest round only.
+              if (canRemove && (!r.isRound || r.isLast)) ...[
+                const SizedBox(width: 4),
+                InkWell(
+                  onTap: () => _removeRound(order, item, r),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      LucideIcons.x,
+                      size: 8,
+                      color: Colors.red.shade400,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -2166,8 +2239,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // No height cap: like the website, the item area grows with its rows
+                // (add-on rounds are separate rows, a cap would hide them).
                 ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: 150),
+                  constraints: const BoxConstraints(),
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2243,8 +2318,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
               children: [
                 if (!isFullyServed) ...[
                   Builder(builder: (ctx) {
-                    final done = _getServedCount(order);
-                    final totalItems = (items is List) ? items.length : 0;
+                    final stats = _getServedStats(order);
+                    final done = stats.done;
+                    final totalItems = stats.all;
                     if (done > 0 && totalItems > 0) {
                       return Padding(
                         padding: EdgeInsets.only(bottom: 8),
@@ -5644,4 +5720,50 @@ class DashedRectPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Green "NEW" pill for add-on rounds (website: animate-pulse).
+class _PulsingNewBadge extends StatefulWidget {
+  const _PulsingNewBadge();
+
+  @override
+  State<_PulsingNewBadge> createState() => _PulsingNewBadgeState();
+}
+
+class _PulsingNewBadgeState extends State<_PulsingNewBadge>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 1, end: 0.5).animate(
+        CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFF10B981),
+          borderRadius: BorderRadius.circular(99),
+        ),
+        child: const Text(
+          'NEW',
+          style: TextStyle(
+            fontSize: 7,
+            fontWeight: FontWeight.w900,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
 }
