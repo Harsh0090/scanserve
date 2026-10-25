@@ -6,7 +6,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:dio/dio.dart';
 import 'dart:math' as math;
 import '../../../utils/apiClient.dart';
-import '../../components/MenuModal.dart';
+import '../../components/menu_modal_route.dart';
 import '../../context/AuthContext.dart';
 import '../../../services/kot_print_service.dart';
 import '../../../utils/responsive.dart';
@@ -46,6 +46,20 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
     super.initState();
     _fetchTables();
     _fetchAreaOrder();
+  }
+
+  // Website: MenuModal is a full-screen overlay (fixed inset-0), not a drawer.
+  void _openMenuModal() {
+    final table = _selectedTable;
+    showMenuModalFullScreen(
+      context,
+      table: table,
+      sendAppendOrder:
+          table != null && table['status'] == 'Running' ? table : null,
+      onOrderPlaced: (newOrder) {
+        _fetchTables();
+      },
+    );
   }
 
   Future<void> _fetchTables() async {
@@ -2298,22 +2312,6 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8FAFB),
-      endDrawer: SizedBox(
-        width: Responsive.endDrawerWidth(context),
-        child: Drawer(
-          elevation: 16,
-          child: MenuModal(
-            table: _selectedTable,
-            onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
-            onOrderPlaced: (newOrder) {
-              _fetchTables();
-            },
-            sendAppendOrder: _selectedTable != null && _selectedTable!['status'] == 'Running' 
-                ? _selectedTable 
-                : null,
-          ),
-        ),
-      ),
       body: Stack(
         children: [
           SingleChildScrollView(
@@ -2403,7 +2401,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                 setState(() {
                                   _selectedTable = null;
                                 });
-                                _scaffoldKey.currentState?.openEndDrawer();
+                                _openMenuModal();
                               },
                               icon: Icon(LucideIcons.plus, size: 14.sp),
                               label: Text('CREATE ORDER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: isMobile ? 10.5.sp : 12.sp)),
@@ -2506,7 +2504,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                       _handleShowBillPreview(table);
                                     } else {
                                       setState(() => _selectedTable = table);
-                                      _scaffoldKey.currentState?.openEndDrawer();
+                                      _openMenuModal();
                                     }
                                   },
                                   borderRadius: BorderRadius.circular(24.r),
@@ -2605,7 +2603,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                           Colors.green,
                                           () {
                                             setState(() => _selectedTable = table);
-                                            _scaffoldKey.currentState?.openEndDrawer();
+                                            _openMenuModal();
                                           },
                                         ),
                                         _buildActionBtn(

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -11,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../utils/apiClient.dart';
 import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
-import '../../components/MenuModal.dart';
+import '../../components/menu_modal_route.dart';
 import '../../../services/kot_print_service.dart';
 
 class OrdersPage extends ConsumerStatefulWidget {
@@ -454,6 +453,32 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         );
       }
     }
+  }
+
+  // Website: MenuModal is a full-screen overlay (fixed inset-0), not a drawer.
+  void _openMenuModal() {
+    showMenuModalFullScreen(
+      context,
+      sendAppendOrder: _appendTarget,
+      onOrderPlaced: (newOrder) {
+        if (!mounted) return;
+        _fetchOrders();
+        if (newOrder is Map) {
+          setState(() {
+            final orderId = newOrder['_id'];
+            final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId.toString());
+            if (idx != -1) {
+              _orders[idx] = newOrder;
+            } else {
+              _orders.insert(0, newOrder);
+            }
+          });
+        }
+      },
+      onClosed: () {
+        if (mounted) setState(() => _appendTarget = null);
+      },
+    );
   }
 
   Future<void> _fetchOrders() async {
@@ -2197,7 +2222,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}',
                           };
                         });
-                        _scaffoldKey.currentState?.openEndDrawer();
+                        _openMenuModal();
                       },
                       borderRadius: BorderRadius.circular(12.r),
                       child: Container(
@@ -2895,35 +2920,6 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
     return Scaffold(
       key: _scaffoldKey,
-      endDrawer: SizedBox(
-        width: MediaQuery.of(context).size.width >= 768
-            ? math.min(740.0, MediaQuery.of(context).size.width * 0.75)
-            : MediaQuery.of(context).size.width,
-        child: Drawer(
-          elevation: 16,
-          child: MenuModal(
-            onClose: () {
-              _scaffoldKey.currentState?.closeEndDrawer();
-              setState(() => _appendTarget = null);
-            },
-            sendAppendOrder: _appendTarget,
-            onOrderPlaced: (newOrder) {
-              _fetchOrders();
-              if (newOrder is Map) {
-                setState(() {
-                  final orderId = newOrder['_id'];
-                  final idx = _orders.indexWhere((o) => o is Map && o['_id'].toString() == orderId.toString());
-                  if (idx != -1) {
-                    _orders[idx] = newOrder;
-                  } else {
-                    _orders.insert(0, newOrder);
-                  }
-                });
-              }
-            },
-          ),
-        ),
-      ),
       backgroundColor: const Color(0xFFFDFCF8),
       body: Stack(
         children: [
@@ -3038,7 +3034,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   ElevatedButton.icon(
                                     onPressed: () {
                                       setState(() => _appendTarget = null);
-                                      _scaffoldKey.currentState?.openEndDrawer();
+                                      _openMenuModal();
                                     },
                                     icon: Icon(LucideIcons.plus, size: 16.sp),
                                     label: Text(
@@ -3176,7 +3172,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                   ElevatedButton.icon(
                                     onPressed: () {
                                       setState(() => _appendTarget = null);
-                                      _scaffoldKey.currentState?.openEndDrawer();
+                                      _openMenuModal();
                                     },
                                     icon: Icon(LucideIcons.plus, size: 16.sp),
                                     label: Text(
@@ -4008,7 +4004,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                               'customerName': order['customerName'] ?? 'Guest',
                             };
                           });
-                          _scaffoldKey.currentState?.openEndDrawer();
+                          _openMenuModal();
                         },
                         borderRadius: BorderRadius.circular(12.r),
                         child: Container(
