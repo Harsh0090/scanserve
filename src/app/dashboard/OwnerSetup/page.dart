@@ -9,6 +9,7 @@ import '../../../utils/apiClient.dart';
 import '../../components/menu_modal_route.dart';
 import '../../context/AuthContext.dart';
 import '../../../services/kot_print_service.dart';
+import '../../../utils/served_ticks.dart';
 
 class OwnerSetupPage extends ConsumerStatefulWidget {
   const OwnerSetupPage({super.key});
@@ -25,6 +26,9 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
 
   // Live order maps and bill states
   Map<String, dynamic> _orderByTable = {};
+  // Ticks from Live Orders (this device): a running table whose order is
+  // fully ticked turns green.
+  Map<String, Map<String, num>> _servedItems = {};
   bool _isBillLoading = false;
   Map<String, dynamic>? _billPreview;
   String? _selectedPaymentMethod;
@@ -107,9 +111,15 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
             map[order['tableNumber'].toString()] = order;
           }
         }
+
+        final restaurantId = restaurantIdOf(ref.read(authProvider).user);
+        final served = restaurantId != null
+            ? await loadServedItems(restaurantId)
+            : <String, Map<String, num>>{};
         if (mounted) {
           setState(() {
             _orderByTable = map;
+            _servedItems = served;
           });
         }
       }
@@ -237,6 +247,11 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
       ],
     );
   }
+
+  // Every row of the table's live order (add-on rounds included) is ticked
+  // on Live Orders. Unticking a row or adding items makes it false again.
+  bool _isTableAllServed(Map<String, dynamic> table) =>
+      isOrderFullyServed(_orderByTable[table['tableName'].toString()], _servedItems);
 
   double _getTableTotal(Map<String, dynamic> table) {
     final order = _orderByTable[table['tableName'].toString()];
@@ -2494,6 +2509,9 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                             final isRunning = table['status'] == 'Running';
                             final double totalAmount = _getTableTotal(table);
                             final int? minutesAgo = _getMinutesAgo(table);
+                            final Color runningColor = _isTableAllServed(table)
+                                ? const Color(0xFF10B981)
+                                : const Color(0xFFFF5C00);
                             
                             return Stack(
                               children: [
@@ -2511,11 +2529,11 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                     width: double.infinity,
                                     height: double.infinity,
                                     decoration: BoxDecoration(
-                                      color: isRunning ? const Color(0xFFFF5C00) : Colors.white,
+                                      color: isRunning ? runningColor : Colors.white,
                                       borderRadius: BorderRadius.circular(24.r),
                                       border: isRunning ? Border.all(color: Colors.transparent) : Border.all(color: Colors.grey.shade200),
                                       boxShadow: isRunning 
-                                          ? [BoxShadow(color: const Color(0xFFFF5C00).withAlpha(50), blurRadius: 20.r, offset: const Offset(0, 8))] 
+                                          ? [BoxShadow(color: runningColor.withAlpha(50), blurRadius: 20.r, offset: const Offset(0, 8))] 
                                           : [BoxShadow(color: Colors.black.withAlpha(5), blurRadius: 10.r, offset: const Offset(0, 4))],
                                     ),
                                     child: Stack(
