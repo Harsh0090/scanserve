@@ -11,6 +11,7 @@ import '../../../utils/apiClient.dart';
 import '../../../utils/apiConfig.dart';
 import '../../context/AuthContext.dart';
 import '../../components/menu_modal_route.dart';
+import '../../components/customer_details.dart';
 import '../../../services/kot_print_service.dart';
 import '../../../utils/served_ticks.dart';
 import '../../../services/auto_kot_print_service.dart';
@@ -348,7 +349,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     Future.delayed(const Duration(seconds: 15), () => _shownPromptKeys.remove(promptKey));
 
     final title = isAddOn ? "Add-on Order" : "New Order";
-    final table = order['tableNumber'] ?? order['customerName'] ?? "NA";
+    // Pickup orders have no table number: show the customer name instead.
+    final table = isPickupOrder(order)
+        ? orTextFallback(order['customerName'], "NA")
+        : "Table ${order['tableNumber']}";
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -362,7 +366,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '$title — Table $table',
+                    '$title — $table',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   Text(
@@ -759,7 +763,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     setState(() {
       _payLaterTarget = {
         'order': order,
-        'defaultName': order['customerName'] ?? '',
+        // Placeholders like "Guest" are not prefilled.
+        'defaultName': realCustomerName(order) ?? '',
       };
     });
   }
@@ -1080,7 +1085,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final Map<String, Map<String, dynamic>> groups = {};
     for (var order in _payLaterOrders) {
       if (order is! Map) continue;
-      final rawName = (order['customerName'] ?? 'Guest').toString();
+      final rawName = orTextFallback(order['customerName'], 'Guest');
       final key = rawName.trim().toLowerCase();
 
       if (!groups.containsKey(key)) {
@@ -2029,6 +2034,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final status = (order['status']?.toString() ?? 'NEW').toUpperCase();
     const isRestaurant = true;
     final isPayLaterOrder = order['paymentStatus'] == 'PAY_LATER';
+    final isPickup = isPickupOrder(order);
     final isReady = status == 'READY';
     final isFullyServed = status == 'SERVED' && !isPayLaterOrder;
 
@@ -2113,6 +2119,25 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             ),
                           ),
                         ],
+                        if (isPickup && !isFullyServed) ...[
+                          SizedBox(width: 6),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF5F3FF),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFDDD6FE)),
+                            ),
+                            child: Text(
+                              'PICKUP',
+                              style: TextStyle(
+                                fontSize: 8,
+                                fontWeight: FontWeight.w900,
+                                color: const Color(0xFF7C3AED),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     Row(
@@ -2165,7 +2190,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   ],
                 ),
                 SizedBox(height: 6),
-                if (!isPayLaterOrder)
+                // Website: pickup and Pay Later cards are titled by customer name.
+                if (!isPayLaterOrder && !isPickup)
                   RichText(
                     text: TextSpan(
                       style: TextStyle(
@@ -2191,7 +2217,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   )
                 else
                   Text(
-                    (order['customerName'] ?? 'Guest').toString(),
+                    orTextFallback(order['customerName'], 'Guest'),
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w900,
@@ -2271,7 +2297,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         setState(() {
                           _appendTarget = {
                             'currentOrderId': order['_id'],
-                            'customerName': order['customerName'] ?? 'Table ${order['tableNumber'] ?? 'Guest'}',
+                            'customerName': orTextFallback(order['customerName'], 'Table ${order['tableNumber'] ?? 'Guest'}'),
                           };
                         });
                         _openMenuModal();
@@ -4034,7 +4060,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                   ),
                   SizedBox(height: 8.h),
                   Text(
-                    (order['customerName'] ?? 'Guest').toString().toUpperCase(),
+                    orTextFallback(order['customerName'], 'Guest').toUpperCase(),
                     style: TextStyle(
                       fontSize: 16.sp,
                       fontWeight: FontWeight.w900,
@@ -4106,7 +4132,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           setState(() {
                             _appendTarget = {
                               'currentOrderId': order['_id'],
-                              'customerName': order['customerName'] ?? 'Guest',
+                              'customerName': orTextFallback(order['customerName'], 'Guest'),
                             };
                           });
                           _openMenuModal();
@@ -4675,7 +4701,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         ),
                         SizedBox(height: 4.h),
                         Text(
-                          _viewDetails['customerName'] ?? 'Walk-in Guest',
+                          orTextFallback(_viewDetails['customerName'], 'Walk-in Guest'),
                           style: TextStyle(
                             fontSize: 16.sp,
                             fontWeight: FontWeight.w900,
@@ -4723,7 +4749,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         ),
                         SizedBox(height: 4.h),
                         Text(
-                          _viewDetails['customerPhone'] ?? 'No Phone',
+                          // Older table orders stored "NA" as the phone.
+                          _viewDetails['customerPhone']?.toString().trim() == 'NA'
+                              ? 'Not Provided'
+                              : orTextFallback(_viewDetails['customerPhone'], 'Not Provided'),
                           style: TextStyle(
                             fontSize: 16.sp,
                             fontWeight: FontWeight.w900,
@@ -4854,17 +4883,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   }
 
   Widget _buildPayLaterModal() {
-    final existingNames = _payLaterOrders
-        .map((o) => (o is Map ? o['customerName']?.toString() : null))
-        .where((n) => n != null && n.trim().isNotEmpty)
-        .map((n) => n!.trim())
-        .toSet()
-        .toList();
-
     return PayLaterModalWidget(
       order: _payLaterTarget['order'],
       defaultName: _payLaterTarget['defaultName'],
-      existingNames: existingNames,
       onConfirm: (name, paidNow, remaining) {
         _handlePayLater(_payLaterTarget['order'], name, paidNow, remaining);
       },
@@ -4887,7 +4908,6 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 class PayLaterModalWidget extends StatefulWidget {
   final dynamic order;
   final String defaultName;
-  final List<String> existingNames;
   final Function(String, num, num?) onConfirm;
   final VoidCallback onCancel;
 
@@ -4895,7 +4915,6 @@ class PayLaterModalWidget extends StatefulWidget {
     super.key,
     required this.order,
     required this.defaultName,
-    this.existingNames = const [],
     required this.onConfirm,
     required this.onCancel,
   });
@@ -4998,10 +5017,17 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
                 ),
               ),
               SizedBox(height: 24.h),
-              TextField(
+              // Past customers of this branch (same suggest API as Create Order)
+              CustomerSuggestField(
                 controller: _nameCtrl,
                 autofocus: true,
                 onChanged: (v) => setState(() {}),
+                onSelected: (c) => setState(() {
+                  _nameCtrl.value = TextEditingValue(
+                    text: c.name,
+                    selection: TextSelection.collapsed(offset: c.name.length),
+                  );
+                }),
                 decoration: InputDecoration(
                   hintText: 'Customer name...',
                   filled: true,
@@ -5014,94 +5040,6 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
                 ),
                 style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900),
               ),
-              if (_nameCtrl.text.trim().isNotEmpty && widget.existingNames.isNotEmpty) ...[
-                Builder(builder: (ctx) {
-                  final query = _nameCtrl.text.trim().toLowerCase();
-                  final matches = widget.existingNames
-                      .where((n) => n.toLowerCase().contains(query) && n.toLowerCase() != query)
-                      .take(4)
-                      .toList();
-                  if (matches.isEmpty) return const SizedBox.shrink();
-
-                  return Container(
-                    margin: EdgeInsets.only(top: 8.h),
-                    padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFFBEB),
-                      borderRadius: BorderRadius.circular(16.r),
-                      border: Border.all(color: const Color(0xFFFDE68A)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'EXISTING CUSTOMERS',
-                          style: TextStyle(
-                            fontSize: 8.sp,
-                            fontWeight: FontWeight.w900,
-                            color: const Color(0xFFD97706),
-                            letterSpacing: 1.w,
-                          ),
-                        ),
-                        SizedBox(height: 6.h),
-                        Wrap(
-                          spacing: 6.w,
-                          runSpacing: 6.h,
-                          children: matches.map((m) {
-                            return InkWell(
-                              onTap: () {
-                                setState(() {
-                                  _nameCtrl.text = m;
-                                });
-                              },
-                              borderRadius: BorderRadius.circular(10.r),
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(10.r),
-                                  border: Border.all(color: const Color(0xFFFDE68A)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 16.r,
-                                      height: 16.r,
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFFFEF3C7),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        m[0].toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: 8.sp,
-                                          fontWeight: FontWeight.w900,
-                                          color: const Color(0xFFD97706),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(width: 5.w),
-                                    Text(
-                                      m,
-                                      style: TextStyle(
-                                        fontSize: 10.5.sp,
-                                        fontWeight: FontWeight.bold,
-                                        color: const Color(0xFF0F172A),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
               SizedBox(height: 16.h),
               if (orderTotal > 0)
                 SizedBox(

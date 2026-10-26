@@ -14,6 +14,7 @@ Future<void> showMenuModalFullScreen(
   Map<String, dynamic>? sendAppendOrder,
   Function(dynamic)? onOrderPlaced,
   VoidCallback? onClosed,
+  bool isPickup = false,
 }) {
   final navigator = Navigator.of(context, rootNavigator: true);
   late final PageRoute<void> route;
@@ -41,6 +42,7 @@ Future<void> showMenuModalFullScreen(
             table: table,
             sendAppendOrder: sendAppendOrder,
             onOrderPlaced: onOrderPlaced,
+            isPickup: isPickup,
             onClose: close,
           ),
         ),

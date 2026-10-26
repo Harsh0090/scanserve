@@ -9,6 +9,7 @@ import '../context/AuthContext.dart';
 import '../../utils/apiClient.dart';
 import '../../services/kot_print_service.dart';
 import '../../services/auto_kot_print_service.dart';
+import 'customer_details.dart';
 
 class MenuModal extends ConsumerStatefulWidget {
   final Map<String, dynamic>? table;
@@ -16,6 +17,8 @@ class MenuModal extends ConsumerStatefulWidget {
   final Function(dynamic)? onOrderPlaced;
   final Map<String, dynamic>? sendAppendOrder;
   final Function(List<dynamic>)? onCartConfirmed;
+  /// Table Management "CREATE ORDER": no table, customer toggle forced on.
+  final bool isPickup;
 
   const MenuModal({
     this.table,
@@ -23,6 +26,7 @@ class MenuModal extends ConsumerStatefulWidget {
     this.onOrderPlaced,
     this.sendAppendOrder,
     this.onCartConfirmed,
+    this.isPickup = false,
     super.key,
   });
 
@@ -77,10 +81,10 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   Map<String, dynamic> _existingItems = {};
   Map<String, int> _originalQuantities = {};
 
-  String? _mode; 
+  String? _mode;
   bool _nameEnabled = false;
-  String _customerName = "";
-  String _customerPhone = "";
+  final TextEditingController _customerNameCtrl = TextEditingController();
+  final TextEditingController _customerPhoneCtrl = TextEditingController();
 
   bool _postOrderModal = false;
   Map<String, dynamic>? _createdOrderRef;
@@ -91,6 +95,9 @@ class _MenuModalState extends ConsumerState<MenuModal> {
   bool _mobileSheetExpanded = false;
 
   bool get _isExistingOrder => widget.sendAppendOrder != null && widget.sendAppendOrder!['currentOrderId'] != null;
+
+  /// Website: the customer toggle and fields only exist for brand-new orders.
+  bool get _showCustomerSection => widget.sendAppendOrder == null && widget.onCartConfirmed == null;
 
   /// Mirrors JS: canPrintKOT = user.autoPrintKOT || user.liveOrderKOT
   bool get _canPrintKOT {
@@ -116,14 +123,45 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       c.dispose();
     }
     _notesByItemId.clear();
+    _customerNameCtrl.dispose();
+    _customerPhoneCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _initPreferences() async {
+    // Pickup orders always start with the customer fields on.
+    if (widget.isPickup) {
+      setState(() => _nameEnabled = true);
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     setState(() {
       _nameEnabled = prefs.getBool('customerDetailsEnabled') ?? false;
     });
+  }
+
+  Future<void> _toggleCustomerDetails() async {
+    final next = !_nameEnabled;
+    setState(() {
+      _nameEnabled = next;
+      if (!next) {
+        _customerNameCtrl.clear();
+        _customerPhoneCtrl.clear();
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('customerDetailsEnabled', next);
+  }
+
+  /// A picked suggestion fills the name, and the phone only when it is known,
+  /// so a phone the user already typed is kept.
+  void _onCustomerPicked(CustomerSuggestion c) {
+    _customerNameCtrl.value = TextEditingValue(
+      text: c.name,
+      selection: TextSelection.collapsed(offset: c.name.length),
+    );
+    if (c.phone != null) _customerPhoneCtrl.text = c.phone!;
   }
 
   Future<void> _initRoleAndData() async {
@@ -543,27 +581,25 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         'skipAutoPrint': !shouldPrintKOT,
       };
 
-      if (_mode == 'quick') {
+      final customerName = _nameEnabled ? _customerNameCtrl.text.trim() : '';
+      final customerPhone = _nameEnabled ? _customerPhoneCtrl.text.trim() : '';
+      final String? phoneOrNull = customerPhone.isEmpty ? null : customerPhone;
+
+      if (widget.isPickup || _mode == 'quick' || _mode == 'foodtruck') {
         payload['paymentMode'] = 'POSTPAID';
-        payload['customerPhone'] = null;
-      }
-      if (_mode == 'restaurant') {
-        payload['tableId'] = widget.table?['_id'];
-        payload['tableNumber'] = widget.table?['tableName'] ?? 'NA';
-        payload['customerPhone'] = 'NA';
-        payload['paymentMode'] = 'POSTPAID';
-        if (_nameEnabled) {
-          payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
+        payload['customerName'] = customerName.isEmpty ? 'Guest' : customerName;
+        payload['customerPhone'] = phoneOrNull;
+      } else if (_mode == 'restaurant') {
+        // No table (Live Orders "Create Order") → the backend makes it a pickup.
+        if (widget.table != null) {
+          payload['tableId'] = widget.table?['_id'];
+          payload['tableNumber'] = widget.table?['tableName'];
         }
-      }
-      if (_mode == 'quick' || _mode == 'foodtruck') {
+        // The website hard-codes "NA" here and drops the typed phone; send it.
+        payload['customerPhone'] = phoneOrNull;
         payload['paymentMode'] = 'POSTPAID';
         if (_nameEnabled) {
-          payload['customerName'] = _customerName.trim().isEmpty ? 'Guest' : _customerName.trim();
-          payload['customerPhone'] = _customerPhone.trim().isEmpty ? null : _customerPhone.trim();
-        } else {
-          payload['customerName'] = 'Guest';
-          payload['customerPhone'] = null;
+          payload['customerName'] = customerName.isEmpty ? 'Guest' : customerName;
         }
       }
 
@@ -641,8 +677,8 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       _postOrderModal = false;
       _createdOrderRef = null;
       _cart = {};
-      _customerName = "";
-      _customerPhone = "";
+      _customerNameCtrl.clear();
+      _customerPhoneCtrl.clear();
     });
     widget.onClose();
   }
@@ -727,7 +763,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                 Column(
                   children: [
                     _buildHeader(),
-                    if (_nameEnabled && widget.sendAppendOrder == null && widget.onCartConfirmed == null)
+                    if (_nameEnabled && _showCustomerSection)
                       _buildCustomerDetailsInputs(),
                     Expanded(
                       child: isWide
@@ -807,6 +843,9 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                     ),
                   ),
 
+                if (_postOrderModal && _createdOrderRef != null)
+                  _buildPostOrderModal(),
+
                 if (_showQR && _qrData != null)
                   _buildQRModal(),
               ],
@@ -850,7 +889,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                         : _isExistingOrder
                             ? "TABLE ${widget.table?['tableName'] ?? widget.sendAppendOrder?['customerName'] ?? ""}"
                             : _mode == "restaurant"
-                                ? "TABLE ${widget.table?['tableName'] ?? ""}"
+                                ? (widget.table == null ? "PICKUP ORDER" : "TABLE ${widget.table?['tableName'] ?? ""}")
                                 : "QUICK ORDER",
                     style: TextStyle(
                       fontSize: 16.sp,
@@ -885,33 +924,38 @@ class _MenuModalState extends ConsumerState<MenuModal> {
           ),
           Row(
             children: [
-              if (widget.sendAppendOrder == null && widget.onCartConfirmed == null)
-                GestureDetector(
-                  onTap: () async {
-                    final next = !_nameEnabled;
-                    setState(() {
-                      _nameEnabled = next;
-                      if (!next) {
-                        _customerName = "";
-                        _customerPhone = "";
-                      }
-                    });
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setBool('customerDetailsEnabled', next);
-                  },
-                  child: Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                    decoration: BoxDecoration(
-                      color: _nameEnabled ? Colors.orange.shade50 : Colors.grey.shade50,
-                      border: Border.all(color: _nameEnabled ? Colors.orange.shade200 : Colors.grey.shade200),
-                      borderRadius: BorderRadius.circular(12.r),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(LucideIcons.user, size: 13.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
-                        SizedBox(width: 6.w),
-                        Icon(_nameEnabled ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
-                      ],
+              if (_showCustomerSection)
+                Tooltip(
+                  message: _nameEnabled ? "Hide customer name & phone" : "Add customer name & phone to this order",
+                  child: GestureDetector(
+                    onTap: _toggleCustomerDetails,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                      decoration: BoxDecoration(
+                        color: _nameEnabled ? Colors.orange.shade50 : Colors.grey.shade50,
+                        border: Border.all(color: _nameEnabled ? Colors.orange.shade200 : Colors.grey.shade200),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(LucideIcons.user, size: 13.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
+                          // Website: label hidden below 640px (hidden sm:inline)
+                          if (MediaQuery.sizeOf(context).width >= 640) ...[
+                            SizedBox(width: 6.w),
+                            Text(
+                              _nameEnabled ? "CUSTOMER ON" : "ADD CUSTOMER",
+                              style: TextStyle(
+                                fontSize: 9.sp,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.5,
+                                color: _nameEnabled ? Colors.orange.shade700 : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                          SizedBox(width: 6.w),
+                          Icon(_nameEnabled ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16.sp, color: _nameEnabled ? Colors.orange : Colors.grey),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -936,16 +980,57 @@ class _MenuModalState extends ConsumerState<MenuModal> {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: Colors.grey.shade100)),
       ),
+      // Both fields suggest past customers; a pick fills name and phone.
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: _buildInput('Customer Name (optional)', _customerName, (val) => setState(() => _customerName = val), LucideIcons.user),
+            child: _buildCustomerInput(
+              hint: 'Customer Name (optional)',
+              icon: LucideIcons.user,
+              controller: _customerNameCtrl,
+              autofocus: true,
+            ),
           ),
           SizedBox(width: 12.w),
           Expanded(
-            child: _buildInput('Phone (optional)', _customerPhone, (val) => setState(() => _customerPhone = val), LucideIcons.phone),
+            child: _buildCustomerInput(
+              hint: 'Phone (optional)',
+              icon: LucideIcons.phone,
+              controller: _customerPhoneCtrl,
+              keyboardType: TextInputType.phone,
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCustomerInput({
+    required String hint,
+    required IconData icon,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    bool autofocus = false,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12.r),
+      ),
+      child: CustomerSuggestField(
+        controller: controller,
+        autofocus: autofocus,
+        keyboardType: keyboardType,
+        onSelected: _onCustomerPicked,
+        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.bold),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(color: Colors.grey.shade400),
+          prefixIcon: Icon(icon, size: 14.sp, color: Colors.grey.shade400),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+        ),
       ),
     );
   }
@@ -1294,21 +1379,75 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     );
   }
 
-  Widget _buildInput(String hint, String value, Function(String) onChanged, IconData icon) {
+  /// Food truck: after placing the order, collect payment right away.
+  Widget _buildPostOrderModal() {
+    final orderId = (_createdOrderRef!['_id'] ?? '').toString();
+    final shortId = orderId.length > 4 ? orderId.substring(orderId.length - 4) : orderId;
+    final name = orTextFallback(_createdOrderRef!['customerName'], 'Guest');
+
+    Widget payButton(String label, String method, Color color, IconData icon) {
+      return Expanded(
+        child: ElevatedButton.icon(
+          onPressed: _paymentProcessing ? null : () => _handlePostOrderPayment(method),
+          icon: Icon(icon, size: 16.sp),
+          label: Text(label, style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: color,
+            foregroundColor: Colors.white,
+            padding: EdgeInsets.symmetric(vertical: 14.h),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+          ),
+        ),
+      );
+    }
+
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(12.r),
-      ),
-      child: TextField(
-        onChanged: onChanged,
-        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.bold),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey.shade400),
-          prefixIcon: Icon(icon, size: 14.sp, color: Colors.grey.shade400),
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      color: Colors.black87,
+      alignment: Alignment.center,
+      child: Container(
+        width: 420,
+        margin: EdgeInsets.all(24.r),
+        padding: EdgeInsets.all(24.r),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24.r)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("ORDER PLACED", style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900, color: Colors.black)),
+            SizedBox(height: 6.h),
+            Text(
+              "#${shortId.toUpperCase()} · $name",
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w800, color: Colors.grey.shade600),
+            ),
+            SizedBox(height: 16.h),
+            Text("₹${_newItemsTotal()}", style: TextStyle(fontSize: 28.sp, fontWeight: FontWeight.w900, color: Colors.black)),
+            SizedBox(height: 20.h),
+            Row(
+              children: [
+                payButton("CASH", "CASH", Colors.green, LucideIcons.banknote),
+                SizedBox(width: 8.w),
+                payButton("UPI", "UPI", Colors.blue, LucideIcons.smartphone),
+                SizedBox(width: 8.w),
+                payButton("CARD", "CARD", Colors.deepPurple, LucideIcons.creditCard),
+              ],
+            ),
+            SizedBox(height: 10.h),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _paymentProcessing ? null : () => _handlePostOrderPayment('PAY_LATER'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.orange.shade800,
+                  side: BorderSide(color: Colors.orange.shade200, width: 2),
+                  padding: EdgeInsets.symmetric(vertical: 12.h),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                ),
+                child: Text("PAY LATER", style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+              ),
+            ),
+          ],
         ),
       ),
     );

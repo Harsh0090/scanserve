@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'dart:math' as math;
 import '../../../utils/apiClient.dart';
 import '../../components/menu_modal_route.dart';
+import '../../components/customer_details.dart';
 import '../../context/AuthContext.dart';
 import '../../../services/kot_print_service.dart';
 import '../../../utils/served_ticks.dart';
@@ -52,11 +53,12 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
   }
 
   // Website: MenuModal is a full-screen overlay (fixed inset-0), not a drawer.
-  void _openMenuModal() {
+  void _openMenuModal({bool isPickup = false}) {
     final table = _selectedTable;
     showMenuModalFullScreen(
       context,
       table: table,
+      isPickup: isPickup,
       sendAppendOrder:
           table != null && table['status'] == 'Running' ? table : null,
       onOrderPlaced: (newOrder) {
@@ -1595,7 +1597,9 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
     final orderId = _billPreview?['table']?['currentOrderId'];
     if (orderId == null) return;
 
-    final TextEditingController nameController = TextEditingController();
+    // Prefill the name saved on the order (placeholders like "Guest" skipped).
+    final existingName = realCustomerName(_orderByTable[_billPreview?['table']?['tableName']?.toString()]);
+    final TextEditingController nameController = TextEditingController(text: existingName ?? '');
     final TextEditingController paidNowController = TextEditingController();
     
     bool partialMode = false;
@@ -1640,10 +1644,16 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                     Text('Enter customer name to track this order', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 0.5.w)),
                     SizedBox(height: 16.h),
     
-                    // Customer name TextField
-                    TextField(
+                    // Customer name field with past-customer suggestions
+                    CustomerSuggestField(
                       controller: nameController,
                       onChanged: (v) => setDialogState(() {}),
+                      onSelected: (c) => setDialogState(() {
+                        nameController.value = TextEditingValue(
+                          text: c.name,
+                          selection: TextSelection.collapsed(offset: c.name.length),
+                        );
+                      }),
                       style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.bold),
                       decoration: InputDecoration(
                         hintText: 'Customer name...',
@@ -2415,7 +2425,7 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                 setState(() {
                                   _selectedTable = null;
                                 });
-                                _openMenuModal();
+                                _openMenuModal(isPickup: true);
                               },
                               icon: Icon(LucideIcons.plus, size: 14.sp),
                               label: Text('CREATE ORDER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: isMobile ? 10.5.sp : 12.sp)),
@@ -2512,7 +2522,10 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                             final Color runningColor = _isTableAllServed(table)
                                 ? const Color(0xFF10B981)
                                 : const Color(0xFFFF5C00);
-                            
+                            final String? chipName = isRunning
+                                ? realCustomerName(_orderByTable[table['tableName'].toString()])
+                                : null;
+
                             return Stack(
                               children: [
                                 InkWell(
@@ -2584,6 +2597,33 @@ class _OwnerSetupPageState extends ConsumerState<OwnerSetupPage> {
                                                 overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
+                                            if (chipName != null) ...[
+                                              SizedBox(height: 2.h),
+                                              LayoutBuilder(
+                                                builder: (context, constraints) => ConstrainedBox(
+                                                  constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.7),
+                                                  child: Row(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      Icon(LucideIcons.user, size: 10.sp, color: Colors.white),
+                                                      SizedBox(width: 3.w),
+                                                      Flexible(
+                                                        child: Text(
+                                                          chipName,
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: TextStyle(
+                                                            fontSize: 10.sp,
+                                                            fontWeight: FontWeight.w800,
+                                                            color: Colors.white,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                             SizedBox(height: 4.h),
                                             Container(
                                               padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
