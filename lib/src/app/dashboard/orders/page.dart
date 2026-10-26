@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,6 +15,7 @@ import '../../components/menu_modal_route.dart';
 import '../../components/customer_details.dart';
 import '../../../services/kot_print_service.dart';
 import '../../../utils/served_ticks.dart';
+import '../../../utils/pay_later_bill.dart';
 import '../../../services/auto_kot_print_service.dart';
 import '../../../utils/responsive.dart';
 
@@ -44,6 +46,13 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   // Track served/ticked items per order (orderId -> { lineId: qty ticked })
   // Same shape as website: an item counts as ticked only while ticked qty >= current quantity
   Map<String, Map<String, num>> _servedItems = {};
+
+  // Discounts typed on pickup / food-truck orders (orderId -> discount), kept
+  // on this device until the order is paid or moved to Pay Later.
+  Map<String, LocalDiscount> _pickupDiscounts = {};
+  String? _discountTargetId;
+  // Method picked on a pickup card before Checkout (orderId -> CASH/UPI/CARD)
+  Map<String, String> _pickupMethods = {};
 
   // Same localStorage key as website, persisted via SharedPreferences
   String? _paymentStorageKey;
@@ -114,6 +123,23 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
         });
         if (mounted) setState(() => _servedItems = parsed);
       }
+      final discountsRaw = saved is Map ? saved['pickupDiscounts'] : null;
+      if (discountsRaw is Map) {
+        final parsed = <String, LocalDiscount>{};
+        discountsRaw.forEach((orderId, d) {
+          final discount = LocalDiscount.fromJson(d);
+          if (!discount.isEmpty) parsed[orderId.toString()] = discount;
+        });
+        if (mounted) setState(() => _pickupDiscounts = parsed);
+      }
+      final methodsRaw = saved is Map ? saved['pickupMethods'] : null;
+      if (methodsRaw is Map) {
+        final parsed = <String, String>{};
+        methodsRaw.forEach((orderId, method) {
+          if (method != null) parsed[orderId.toString()] = method.toString();
+        });
+        if (mounted) setState(() => _pickupMethods = parsed);
+      }
     } catch (e) {
       debugPrint("Failed to load payment state: $e");
     }
@@ -130,10 +156,55 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       final decoded = raw != null ? jsonDecode(raw) : null;
       final saved = decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
       saved['servedItems'] = _servedItems;
+      saved['pickupDiscounts'] = _pickupDiscounts.map((id, d) => MapEntry(id, d.toJson()));
+      saved['pickupMethods'] = _pickupMethods;
       await prefs.setString(_paymentStorageKey!, jsonEncode(saved));
     } catch (e) {
       debugPrint("Failed to save payment state: $e");
     }
+  }
+
+  // Session field from either session shape (user.data.x or user.x).
+  dynamic _userField(String key) {
+    final user = ref.read(authProvider).user;
+    final data = user?['data'];
+    return (data is Map ? data[key] : null) ?? user?[key];
+  }
+
+  bool get _isFoodTruck => _userField('businessType') == 'FOOD_TRUCK';
+
+  // Website: Discount is offered on pickup orders and on food-truck orders;
+  // table orders go to Pay Later without one.
+  bool _canDiscount(dynamic order) => _isFoodTruck || isPickupOrder(order);
+
+  LocalDiscount _discountFor(dynamic order) {
+    if (order is! Map || !_canDiscount(order)) return LocalDiscount.none;
+    return _pickupDiscounts[order['_id']?.toString()] ?? LocalDiscount.none;
+  }
+
+  // Website getPickupBill(): GST-inclusive bill with this device's discount
+  // (or [discount], for the discount modal's preview).
+  PickupBill _pickupBill(dynamic order, [LocalDiscount? discount]) => calculatePickupBill(
+        order,
+        gstEnabled: _userField('gstEnabled') == true,
+        gstRate: numOf(_userField('gstRate')),
+        discount: discount ?? _discountFor(order),
+      );
+
+  void _setPickupDiscount(String orderId, LocalDiscount discount) {
+    setState(() {
+      if (discount.isEmpty) {
+        _pickupDiscounts.remove(orderId);
+      } else {
+        _pickupDiscounts[orderId] = discount;
+      }
+    });
+    _savePaymentState();
+  }
+
+  // The discount is saved on the order once it is paid or moved to Pay Later.
+  void _dropPickupDiscount(dynamic orderId) {
+    if (_pickupDiscounts.remove(orderId?.toString()) != null) _savePaymentState();
   }
 
   // Pay Later partial amounts and state
@@ -245,6 +316,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       if (newOrder is! Map) return;
 
       final orderId = newOrder['_id']?.toString() ?? '';
+      // Partial Pay Later collection carries only {customerName, type}: refresh
+      // that list, never insert it as a (blank) live order.
+      if (orderId.isEmpty) {
+        if (newOrder['type'] == 'PARTIAL_PAYMENT') _fetchPayLaterOrders();
+        return;
+      }
       final eventKey = "$orderId-${newOrder['type'] ?? 'base'}-${newOrder['updatedAt'] ?? newOrder['createdAt']}";
 
       // Socket event deduplication with 10s auto-cleanup
@@ -314,6 +391,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           _orders.insert(0, newOrder);
         }
       });
+
+      // Pay Later made or settled on another device
+      final paymentStatus = newOrder['paymentStatus'];
+      if (paymentStatus == 'PAY_LATER' ||
+          (paymentStatus == 'PAID' &&
+              _payLaterOrders.any((o) => o is Map && o['_id']?.toString() == orderId))) {
+        _fetchPayLaterOrders();
+      }
     }
 
     _socket?.on('new_order', upsertOrder);
@@ -484,6 +569,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     try {
       final data = await apiFetch('/api/admin/orders/live');
       if (mounted && data is List) {
+        bool pickupStatePruned = false;
         setState(() {
           final pendingOrders = _orders
               .where((o) =>
@@ -500,7 +586,15 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             }
           }
           _orders = newOrders;
+
+          // A discount or picked method lasts only while its order is live
+          final liveIds = newOrders.map((o) => o is Map ? o['_id']?.toString() : null).toSet();
+          final before = _pickupDiscounts.length + _pickupMethods.length;
+          _pickupDiscounts.removeWhere((id, _) => !liveIds.contains(id));
+          _pickupMethods.removeWhere((id, _) => !liveIds.contains(id));
+          pickupStatePruned = _pickupDiscounts.length + _pickupMethods.length != before;
         });
+        if (pickupStatePruned) _savePaymentState();
       }
     } catch (e) {
       debugPrint("Live Orders Error: $e");
@@ -629,7 +723,79 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     }
   }
 
+  // Shows the bill error (e.g. a flat discount now above a smaller bill)
+  // and returns true when the order can't be paid as it stands.
+  bool _blockedByBillError(PickupBill bill) {
+    if (bill.error == null) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Discount: ${bill.error}'), backgroundColor: Colors.red),
+    );
+    return true;
+  }
+
+  // Website checkout (pickup, and food truck with a discount): collect-payment
+  // saves this device's discount and closes the order (PAID + SERVED).
+  Future<void> _collectWithDiscount(dynamic order, String method, {required bool printBill}) async {
+    final orderId = order['_id'].toString();
+    final discount = _discountFor(order);
+    if (_blockedByBillError(_pickupBill(order))) return;
+    try {
+      setState(() => _paymentUpdating = '$orderId-$method');
+      await apiFetch(
+        '/api/admin/orders/collect-payment',
+        method: 'PATCH',
+        data: {
+          'orderId': order['_id'],
+          'paymentMethod': method,
+          'discountType': discount.type,
+          'discountValue': discount.numeric,
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Paid via $method${discount.isEmpty ? '' : ' (discount applied)'} ✓'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        setState(() {
+          _orders.removeWhere((o) => o is Map && o['_id'].toString() == orderId);
+          _pickupDiscounts.remove(orderId);
+          _pickupMethods.remove(orderId);
+        });
+        _savePaymentState();
+      }
+      if (printBill) {
+        _printOrderBill(order);
+      }
+      await _fetchOrders();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Payment failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _paymentUpdating = null);
+    }
+  }
+
+  void _setPickupMethod(String orderId, String? method) {
+    setState(() {
+      if (method == null) {
+        _pickupMethods.remove(orderId);
+      } else {
+        _pickupMethods[orderId] = method;
+      }
+    });
+    _savePaymentState();
+  }
+
   Future<void> _handleCollectEarly(dynamic order, String method) async {
+    // collect-early can't carry a discount
+    if (!_discountFor(order).isEmpty) {
+      return _collectWithDiscount(order, method, printBill: _userField('autoPrintBill') == true);
+    }
     try {
       setState(() => _paymentUpdating = '${order['_id']}-$method');
       await apiFetch(
@@ -702,6 +868,9 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     num paidNow,
     num? remaining,
   ) async {
+    final discount = _discountFor(order);
+    final bill = _pickupBill(order);
+    if (_blockedByBillError(bill)) return;
     try {
       setState(() => _payLaterUpdating = order['_id']);
       final res = await apiFetch(
@@ -711,8 +880,14 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           'customerName': customerName,
           'paidNow': paidNow,
           'remaining': remaining,
+          // Backend applies the discount to billTotal (GST-inclusive, before
+          // discount) and saves discount, finalAmount and partialPayment.
+          'discountType': discount.type,
+          'discountValue': discount.numeric,
+          'billTotal': bill.total,
         },
       );
+      _dropPickupDiscount(order['_id']);
       final updatedOrder = (res is Map && res['order'] != null)
           ? res['order']
           : res;
@@ -737,7 +912,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           SnackBar(
             content: Text(
               paidNow > 0
-                  ? '₹$paidNow collected, ₹$remaining pending for $customerName'
+                  ? '₹${inr(paidNow)} collected, ₹${inr(remaining ?? 0)} pending for $customerName'
                   : 'Pay Later saved for $customerName',
             ),
             backgroundColor: Colors.green,
@@ -1082,62 +1257,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
 
   List<Map<String, dynamic>> _getGroupedPayLaterOrders() {
-    final Map<String, Map<String, dynamic>> groups = {};
-    for (var order in _payLaterOrders) {
-      if (order is! Map) continue;
-      final rawName = orTextFallback(order['customerName'], 'Guest');
-      final key = rawName.trim().toLowerCase();
-
-      if (!groups.containsKey(key)) {
-        groups[key] = {
-          'customerName': rawName.trim(),
-          'orders': <dynamic>[],
-          'totalOwed': 0.0,
-          'totalPaid': 0.0,
-          'totalBill': 0.0,
-        };
-      }
-
-      double orderTotal = 0.0;
-      final items = order['items'];
-      if (items is List) {
-        for (var i in items) {
-          if (i is! Map) continue;
-          final itemData = i['item'];
-          final price = num.tryParse(((itemData is Map ? itemData['branchPrice'] : null) ?? i['basePrice'] ?? 0).toString()) ?? 0;
-          final qty = num.tryParse((i['quantity'] ?? 1).toString()) ?? 1;
-          orderTotal += (price * qty);
-        }
-      }
-
-      final partialPayment = order['partialPayment'];
-      final num paidNow = (partialPayment is Map && partialPayment['paidNow'] != null)
-          ? (num.tryParse(partialPayment['paidNow'].toString()) ?? 0)
-          : 0;
-      final bool hasPartial = paidNow > 0;
-      final double owedForThisOrder = hasPartial
-          ? (num.tryParse((partialPayment['remaining'] ?? orderTotal).toString())?.toDouble() ?? orderTotal)
-          : orderTotal;
-      final double paidForThisOrder = hasPartial ? paidNow.toDouble() : 0.0;
-
-      (groups[key]!['orders'] as List<dynamic>).add({
-        ...order,
-        'orderTotal': orderTotal,
-      });
-      groups[key]!['totalBill'] = (groups[key]!['totalBill'] as double) + orderTotal;
-      groups[key]!['totalPaid'] = (groups[key]!['totalPaid'] as double) + paidForThisOrder;
-      groups[key]!['totalOwed'] = (groups[key]!['totalOwed'] as double) + owedForThisOrder;
-    }
-
-    final list = groups.values.toList();
-    for (var g in list) {
-      final ords = g['orders'] as List<dynamic>;
-      ords.sort((a, b) {
-        final dateA = DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final dateB = DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return dateB.compareTo(dateA);
-      });
-    }
+    // Totals use each order's saved finalAmount (after GST and discount).
+    final list = groupPayLaterOrders(_payLaterOrders);
 
     if (_searchQuery.trim().isNotEmpty) {
       final q = _searchQuery.trim().toLowerCase();
@@ -1172,7 +1293,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     if (amount > totalOwed) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Amount cannot exceed ₹${totalOwed.toInt()} owed'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Amount cannot exceed ₹${inr(totalOwed)} owed'), backgroundColor: Colors.red),
         );
       }
       return;
@@ -1192,7 +1313,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('₹$amount collected via $method ✓'),
+            content: Text('₹${inr(amount)} collected via $method ✓'),
             backgroundColor: Colors.green,
           ),
         );
@@ -1260,7 +1381,20 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     required VoidCallback? onPressed,
     double vertical = 8,
     double letterSpacing = 0.4,
+    IconData? icon,
   }) {
+    final text = Text(
+      label,
+      textAlign: TextAlign.center,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 8,
+        fontWeight: FontWeight.w900,
+        color: fg,
+        letterSpacing: letterSpacing,
+      ),
+    );
     return Expanded(
       child: Opacity(
         opacity: onPressed == null ? 0.6 : 1,
@@ -1275,19 +1409,229 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: vertical),
-              child: Text(
-                label,
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w900,
-                  color: fg,
-                  letterSpacing: letterSpacing,
+              child: icon == null
+                  ? text
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(icon, size: 9, color: fg),
+                        const SizedBox(width: 4),
+                        Flexible(child: text),
+                      ],
+                    ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Website pickup card footer: Payable, then the method buttons with
+  /// Split / Pay Later / Discount, or — once a method is picked —
+  /// "Paid via X" with Checkout (and Print Bill when auto-print is on).
+  Widget _buildPickupPayment(dynamic order) {
+    final orderId = order['_id'].toString();
+    final bill = _pickupBill(order);
+    final hasDiscount = bill.discountAmount > 0;
+    final method = _pickupMethods[orderId];
+    final bool anyPaying = _paymentUpdating != null;
+    final bool paying = _paymentUpdating?.startsWith(orderId) ?? false;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildPayableRow(bill),
+        const SizedBox(height: 6),
+        if (method == null) ...[
+          const Text(
+            'COLLECT PAYMENT',
+            style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFFFB923C),
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              for (final m in const ['CASH', 'UPI', 'CARD']) ...[
+                if (m != 'CASH') const SizedBox(width: 4),
+                _webCardButton(
+                  label: m,
+                  bg: const Color(0xFFF1F5F9),
+                  border: const Color(0xFFF1F5F9),
+                  fg: const Color(0xFF0F172A),
+                  vertical: 6,
+                  onPressed: anyPaying ? null : () => _setPickupMethod(orderId, m),
                 ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              _webCardButton(
+                label: '✂ SPLIT',
+                bg: const Color(0xFFF5F3FF),
+                border: const Color(0xFFDDD6FE),
+                fg: const Color(0xFF7C3AED),
+                vertical: 6,
+                onPressed: () => setState(() => _splitTarget = order),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              _webCardButton(
+                label: _payLaterUpdating == order['_id'] ? '...' : 'PAY LATER',
+                bg: const Color(0xFFFFFBEB),
+                border: const Color(0xFFFDE68A),
+                fg: const Color(0xFFD97706),
+                vertical: 6,
+                letterSpacing: 0.8,
+                onPressed: _payLaterUpdating == order['_id'] ? null : () => _initiatePayLater(order),
+              ),
+              const SizedBox(width: 4),
+              _webCardButton(
+                label: hasDiscount ? 'DISCOUNT · −₹${inr(bill.discountAmount)}' : 'DISCOUNT',
+                bg: hasDiscount ? const Color(0xFFF97316) : const Color(0xFFFFF7ED),
+                border: hasDiscount ? const Color(0xFFF97316) : const Color(0xFFFED7AA),
+                fg: hasDiscount ? Colors.white : const Color(0xFFEA580C),
+                vertical: 6,
+                letterSpacing: 0.8,
+                onPressed: () => _openDiscount(order),
+              ),
+            ],
+          ),
+        ] else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFD1FAE5)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Tap to pick another method
+                InkWell(
+                  onTap: anyPaying ? null : () => _setPickupMethod(orderId, null),
+                  child: Text(
+                    '✓ PAID VIA $method',
+                    style: const TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF059669),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    _webCardButton(
+                      label: paying ? '...' : 'CHECKOUT',
+                      bg: const Color(0xFF10B981),
+                      border: const Color(0xFF10B981),
+                      fg: Colors.white,
+                      vertical: 6,
+                      letterSpacing: 0.8,
+                      onPressed: anyPaying || bill.error != null
+                          ? null
+                          : () => _collectWithDiscount(order, method, printBill: false),
+                    ),
+                    if (_userField('autoPrintBill') == true) ...[
+                      const SizedBox(width: 4),
+                      _webCardButton(
+                        label: paying ? '...' : 'PRINT BILL',
+                        icon: LucideIcons.printer,
+                        bg: const Color(0xFFFF5C00),
+                        border: const Color(0xFFFF5C00),
+                        fg: Colors.white,
+                        vertical: 6,
+                        letterSpacing: 0.8,
+                        onPressed: anyPaying || bill.error != null
+                            ? null
+                            : () => _collectWithDiscount(order, method, printBill: true),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _openDiscount(dynamic order) =>
+      setState(() => _discountTargetId = order['_id']?.toString());
+
+  /// Website pickup "Payable" row (px-2 py-1.5 bg-slate-50 rounded-lg):
+  /// the bill after GST and this device's discount.
+  Widget _buildPayableRow(PickupBill bill, {bool large = false}) {
+    final label = bill.discountAmount > 0
+        ? 'PAYABLE (−₹${inr(bill.discountAmount)})'
+        : bill.gstRate > 0
+            ? 'PAYABLE (GST ${inr(bill.gstRate)}%)'
+            : 'PAYABLE';
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: large ? 10.w : 8, vertical: large ? 8.h : 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(large ? 10.r : 8),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: large ? 9.sp : 8,
+                fontWeight: FontWeight.w900,
+                color: const Color(0xFF94A3B8),
               ),
             ),
+          ),
+          Text(
+            '₹${inr(bill.finalAmount)}',
+            style: TextStyle(
+              fontSize: large ? 15.sp : 14,
+              fontWeight: FontWeight.w900,
+              color: const Color(0xFF059669),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Website Discount button on the food-truck card: orange outline, filled
+  /// once a discount is set.
+  Widget _buildDiscountButton(dynamic order, PickupBill bill) {
+    final active = bill.discountAmount > 0;
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton(
+        onPressed: () => _openDiscount(order),
+        style: OutlinedButton.styleFrom(
+          backgroundColor: active ? const Color(0xFFF97316) : const Color(0xFFFFF7ED),
+          foregroundColor: active ? Colors.white : const Color(0xFFEA580C),
+          side: BorderSide(color: active ? const Color(0xFFF97316) : const Color(0xFFFED7AA)),
+          padding: EdgeInsets.symmetric(vertical: 10.h),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10.r),
+          ),
+        ),
+        child: Text(
+          active ? 'DISCOUNT · −₹${inr(bill.discountAmount)}' : 'DISCOUNT',
+          style: TextStyle(
+            fontSize: 9.sp,
+            fontWeight: FontWeight.w900,
           ),
         ),
       ),
@@ -1686,6 +2030,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     bool isPayLaterOrder,
     bool isRestaurant,
   ) {
+    // Website: a pickup card has no kitchen status buttons; it shows
+    // its payment section at every status until it is paid.
+    if (isPickupOrder(order) && !isFullyServed && !isPayLaterOrder && _activeFilter != 'SERVED') {
+      return _buildPickupPayment(order);
+    }
+
     if (isReady && !isPayLaterOrder && _activeFilter != 'SERVED') {
       // Website: grid-cols-3 gap-1 (CASH / UPI / CARD) + grid-cols-2 (Pay Later / Split)
       void collect(String method) => isRestaurant
@@ -2416,9 +2766,12 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final double totalBill = (group['totalBill'] as num?)?.toDouble() ?? 0.0;
     final double totalPaid = (group['totalPaid'] as num?)?.toDouble() ?? 0.0;
     final double totalOwed = (group['totalOwed'] as num?)?.toDouble() ?? 0.0;
+    final double totalDiscount = (group['totalDiscount'] as num?)?.toDouble() ?? 0.0;
+    final double billBeforeDiscount = (group['billBeforeDiscount'] as num?)?.toDouble() ?? 0.0;
     final List<dynamic> orders = (group['orders'] is List) ? group['orders'] as List : [];
     final ctrl = _getPartialController(customerName);
     final isCollecting = _partialCollectingCustomer == customerName;
+    const discountGreen = Color(0xFF16A34A);
 
     return Container(
       decoration: BoxDecoration(
@@ -2447,7 +2800,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
+                Expanded(
+                 child: Row(
                   children: [
                     Container(
                       width: 38.r,
@@ -2467,7 +2821,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                       ),
                     ),
                     SizedBox(width: 10.w),
-                    Column(
+                    Flexible(
+                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
@@ -2490,9 +2845,32 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                           ),
                         ),
                       ],
+                     ),
                     ),
                   ],
+                 ),
                 ),
+                // Total discount given to this customer
+                if (totalDiscount > 0) ...[
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 5.h),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4), // green-50
+                      borderRadius: BorderRadius.circular(20.r),
+                      border: Border.all(color: const Color(0xFFBBF7D0)), // green-200
+                    ),
+                    child: Text(
+                      '₹${inr(totalDiscount)} OFF',
+                      style: TextStyle(
+                        fontSize: 8.5.sp,
+                        fontWeight: FontWeight.w900,
+                        color: discountGreen,
+                        letterSpacing: 0.5.w,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 6.w),
+                ],
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 5.h),
                   decoration: BoxDecoration(
@@ -2646,6 +3024,61 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                                 );
                               }),
                             ],
+                            // Discount saved on this order
+                            if (orderDiscountAmount(order) > 0)
+                              Padding(
+                                padding: EdgeInsets.only(bottom: 4.h),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        'DISCOUNT · ${discountLabel(order['discount']).toUpperCase()}',
+                                        style: TextStyle(
+                                          fontSize: 8.5.sp,
+                                          fontWeight: FontWeight.w900,
+                                          color: discountGreen,
+                                          letterSpacing: 0.5.w,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Text(
+                                      '−₹${inr(orderDiscountAmount(order))}',
+                                      style: TextStyle(
+                                        fontSize: 10.sp,
+                                        fontWeight: FontWeight.w900,
+                                        color: discountGreen,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            // Order payable, when GST and/or a discount make it differ from the item lines
+                            if ((numOf(order['orderTotal']) - orderItemsSum(order)).abs() > 0.009)
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'ORDER TOTAL',
+                                      style: TextStyle(
+                                        fontSize: 8.5.sp,
+                                        fontWeight: FontWeight.w900,
+                                        color: const Color(0xFF94A3B8),
+                                        letterSpacing: 0.5.w,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    '₹${inr(numOf(order['orderTotal']))}',
+                                    style: TextStyle(
+                                      fontSize: 10.sp,
+                                      fontWeight: FontWeight.w900,
+                                      color: const Color(0xFF0F172A),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             if (ordIdx < orders.length - 1)
                               Padding(
                                 padding: EdgeInsets.symmetric(vertical: 6.h),
@@ -2667,6 +3100,58 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Bill (incl. GST) − Discount = Total Bill, so the card adds up
+                if (totalDiscount > 0) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _userField('gstEnabled') == true ? 'BILL (INCL. GST)' : 'BILL',
+                        style: TextStyle(
+                          fontSize: 8.5.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF94A3B8),
+                          letterSpacing: 1.w,
+                        ),
+                      ),
+                      Text(
+                        '₹${inr(billBeforeDiscount)}',
+                        style: TextStyle(
+                          fontSize: 12.sp,
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF334155),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 4.h),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'DISCOUNT',
+                        style: TextStyle(
+                          fontSize: 8.5.sp,
+                          fontWeight: FontWeight.w900,
+                          color: discountGreen,
+                          letterSpacing: 1.w,
+                        ),
+                      ),
+                      Text(
+                        '−₹${inr(totalDiscount)}',
+                        style: TextStyle(
+                          fontSize: 12.sp,
+                          fontWeight: FontWeight.w900,
+                          color: discountGreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Padding(
+                    padding: EdgeInsets.symmetric(vertical: 6.h),
+                    child: Divider(height: 1.h, color: const Color(0xFFE2E8F0)),
+                  ),
+                ],
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -2680,7 +3165,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                       ),
                     ),
                     Text(
-                      '₹${totalBill.toInt()}',
+                      '₹${inr(totalBill)}',
                       style: TextStyle(
                         fontSize: 20.sp,
                         fontWeight: FontWeight.w900,
@@ -2716,7 +3201,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             ),
                             SizedBox(height: 1.h),
                             Text(
-                              '₹${totalPaid.toInt()}',
+                              '₹${inr(totalPaid)}',
                               style: TextStyle(
                                 fontSize: 12.sp,
                                 fontWeight: FontWeight.w900,
@@ -2739,7 +3224,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                             ),
                             SizedBox(height: 1.h),
                             Text(
-                              '₹${totalOwed.toInt()}',
+                              '₹${inr(totalOwed)}',
                               style: TextStyle(
                                 fontSize: 12.sp,
                                 fontWeight: FontWeight.w900,
@@ -2787,10 +3272,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         ),
                         child: TextField(
                           controller: ctrl,
-                          keyboardType: TextInputType.number,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A)),
                           decoration: InputDecoration(
-                            hintText: 'Up to ₹${totalOwed.toInt()}',
+                            hintText: 'Up to ₹${inr(totalOwed)}',
                             hintStyle: TextStyle(
                               fontSize: 11.sp,
                               fontWeight: FontWeight.w500,
@@ -3740,6 +4225,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
           if (_viewDetails != null) _buildDetailsModal(),
           if (_paymentModal) _buildPaymentModal(),
           if (_payLaterTarget != null) _buildPayLaterModal(),
+          if (_discountTargetId != null) _buildDiscountModal(),
           if (_splitTarget != null) _buildSplitPaymentModal(),
         ],
       ),
@@ -3935,6 +4421,7 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     final last4 = orderId.length >= 4
         ? orderId.substring(orderId.length - 4).toUpperCase()
         : orderId.toUpperCase();
+    final truckBill = _pickupBill(order);
 
     final Color stripeColor = status == 'NEW'
         ? const Color(0xFF60A5FA)
@@ -4396,6 +4883,10 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
 
                   // ── Collect Payment (active, unpaid orders) ──
                   if (!isPaid && !isServed && !isPayLaterOrder) ...[
+                    if (truckBill.discountAmount > 0) ...[
+                      _buildPayableRow(truckBill, large: true),
+                      SizedBox(height: 8.h),
+                    ],
                     Text(
                       'COLLECT PAYMENT',
                       style: TextStyle(
@@ -4470,6 +4961,8 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
                         ),
                       ),
                     ),
+                    SizedBox(height: 6.h),
+                    _buildDiscountButton(order, truckBill),
                     SizedBox(height: 6.h),
                     Row(
                       children: [
@@ -4886,10 +5379,34 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
     return PayLaterModalWidget(
       order: _payLaterTarget['order'],
       defaultName: _payLaterTarget['defaultName'],
+      // Payable after GST and discount, which the backend will save
+      orderTotal: _pickupBill(_payLaterTarget['order']).finalAmount,
       onConfirm: (name, paidNow, remaining) {
         _handlePayLater(_payLaterTarget['order'], name, paidNow, remaining);
       },
       onCancel: () => setState(() => _payLaterTarget = null),
+    );
+  }
+
+  Widget _buildDiscountModal() {
+    final order = _orders.firstWhere(
+      (o) => o is Map && o['_id']?.toString() == _discountTargetId,
+      orElse: () => null,
+    );
+    if (order == null) return const SizedBox.shrink(); // order left the live list
+    final orderId = _discountTargetId!;
+    return DiscountModalWidget(
+      key: ValueKey(orderId),
+      initial: _pickupDiscounts[orderId] ?? LocalDiscount.none,
+      billFor: (discount) => _pickupBill(order, discount),
+      onApply: (discount) {
+        _setPickupDiscount(orderId, discount);
+        setState(() => _discountTargetId = null);
+      },
+      onRemove: () {
+        _setPickupDiscount(orderId, LocalDiscount.none);
+        setState(() => _discountTargetId = null);
+      },
     );
   }
 
@@ -4905,9 +5422,301 @@ class _OrdersPageState extends ConsumerState<OrdersPage> {
   }
 }
 
+/// Website discount modal: % or ₹ off a pickup / food-truck bill (after GST).
+/// Edits a draft; Apply is disabled while the draft is invalid, Remove clears
+/// the discount. Tapping outside does nothing, as on the website.
+class DiscountModalWidget extends StatefulWidget {
+  final LocalDiscount initial;
+  final PickupBill Function(LocalDiscount) billFor;
+  final ValueChanged<LocalDiscount> onApply;
+  final VoidCallback onRemove;
+
+  const DiscountModalWidget({
+    super.key,
+    required this.initial,
+    required this.billFor,
+    required this.onApply,
+    required this.onRemove,
+  });
+
+  @override
+  State<DiscountModalWidget> createState() => _DiscountModalWidgetState();
+}
+
+class _DiscountModalWidgetState extends State<DiscountModalWidget> {
+  late LocalDiscount _draft = widget.initial;
+  late final TextEditingController _valueCtrl = TextEditingController(text: widget.initial.value);
+
+  static const _orange = Color(0xFFF97316);
+
+  @override
+  void dispose() {
+    _valueCtrl.dispose();
+    super.dispose();
+  }
+
+  void _setType(String type) => setState(() {
+        _draft = LocalDiscount(type: type);
+        _valueCtrl.clear();
+      });
+
+  void _setValue(String value) =>
+      setState(() => _draft = LocalDiscount(type: _draft.type, value: value));
+
+  Widget _typeButton(String type, String label) {
+    final selected = _draft.type == type;
+    return Expanded(
+      child: InkWell(
+        onTap: () => _setType(type),
+        borderRadius: BorderRadius.circular(16.r),
+        child: Container(
+          padding: EdgeInsets.symmetric(vertical: 12.h),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? _orange : const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(16.r),
+            border: Border.all(color: selected ? _orange : const Color(0xFFE2E8F0), width: 2),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.sp,
+              fontWeight: FontWeight.w900,
+              color: selected ? Colors.white : const Color(0xFF94A3B8),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _previewRow(String label, String value, Color color, {double size = 13}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w900, color: color)),
+        Text(value, style: TextStyle(fontSize: size.sp, fontWeight: FontWeight.w900, color: color)),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bill = widget.billFor(_draft);
+    final isPct = _draft.type == discountPercentage;
+
+    return Container(
+      color: const Color(0xFF0F172A).withAlpha(150),
+      alignment: Alignment.center,
+      padding: EdgeInsets.all(24.r),
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 400.w,
+          padding: EdgeInsets.all(32.r),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(48.r),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 40.r,
+                      height: 40.r,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(16.r),
+                      ),
+                      child: Icon(Icons.currency_rupee, color: _orange, size: 20.sp),
+                    ),
+                    SizedBox(width: 12.w),
+                    Text(
+                      'DISCOUNT',
+                      style: TextStyle(
+                        fontSize: 20.sp,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 8.h),
+                Text(
+                  'BILL: ₹${inr(bill.total)}${bill.gstRate > 0 ? ' (INCL. GST ${inr(bill.gstRate)}%)' : ''}',
+                  style: TextStyle(
+                    fontSize: 10.sp,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                    letterSpacing: 1.w,
+                  ),
+                ),
+                SizedBox(height: 24.h),
+                Row(
+                  children: [
+                    _typeButton(discountPercentage, '% OFF'),
+                    SizedBox(width: 8.w),
+                    _typeButton(discountFixed, '₹ OFF'),
+                  ],
+                ),
+                if (isPct) ...[
+                  SizedBox(height: 12.h),
+                  Row(
+                    children: [
+                      for (final p in const [5, 10, 15, 20]) ...[
+                        if (p != 5) SizedBox(width: 8.w),
+                        Expanded(
+                          child: InkWell(
+                            onTap: () {
+                              _valueCtrl.text = '$p';
+                              _setValue('$p');
+                            },
+                            borderRadius: BorderRadius.circular(12.r),
+                            child: Container(
+                              padding: EdgeInsets.symmetric(vertical: 8.h),
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: _draft.numeric == p ? const Color(0xFFFFEDD5) : Colors.white,
+                                borderRadius: BorderRadius.circular(12.r),
+                                border: Border.all(
+                                  color: _draft.numeric == p ? const Color(0xFFFDBA74) : const Color(0xFFE2E8F0),
+                                ),
+                              ),
+                              child: Text(
+                                '$p%',
+                                style: TextStyle(
+                                  fontSize: 10.sp,
+                                  fontWeight: FontWeight.w900,
+                                  color: _draft.numeric == p ? const Color(0xFFEA580C) : const Color(0xFF94A3B8),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+                if (_draft.type != discountNone) ...[
+                  SizedBox(height: 12.h),
+                  TextField(
+                    controller: _valueCtrl,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    // Website: no negatives
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*'))],
+                    textAlign: TextAlign.center,
+                    onChanged: _setValue,
+                    decoration: InputDecoration(
+                      prefixIcon: Padding(
+                        padding: EdgeInsets.only(left: 16.w, right: 8.w),
+                        child: Text(
+                          isPct ? '%' : '₹',
+                          style: TextStyle(
+                            fontSize: 20.sp,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                      hintText: isPct ? 'Discount %' : 'Discount ₹',
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24.r),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: EdgeInsets.all(20.r),
+                    ),
+                    style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w900),
+                  ),
+                ],
+                if (bill.error != null) ...[
+                  SizedBox(height: 8.h),
+                  Text(
+                    bill.error!,
+                    style: TextStyle(
+                      fontSize: 11.sp,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFFEF4444),
+                    ),
+                  ),
+                ],
+                SizedBox(height: 16.h),
+                Container(
+                  padding: EdgeInsets.all(16.r),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(16.r),
+                    border: Border.all(color: const Color(0xFFF1F5F9)),
+                  ),
+                  child: Column(
+                    children: [
+                      _previewRow('BILL', '₹${inr(bill.total)}', const Color(0xFF334155)),
+                      SizedBox(height: 8.h),
+                      _previewRow('DISCOUNT', '- ₹${inr(bill.discountAmount)}', const Color(0xFFEF4444)),
+                      Divider(height: 24.h),
+                      _previewRow('PAYABLE', '₹${inr(bill.finalAmount)}', const Color(0xFF059669), size: 16),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 24.h),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: widget.onRemove,
+                        child: Text(
+                          'REMOVE',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 11.sp,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: bill.error != null ? null : () => widget.onApply(_draft),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _orange,
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 20.h),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16.r),
+                          ),
+                        ),
+                        child: Text(
+                          'APPLY',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 11.sp,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class PayLaterModalWidget extends StatefulWidget {
   final dynamic order;
   final String defaultName;
+  // Payable after GST and discount; the item sum when not given.
+  final num? orderTotal;
   final Function(String, num, num?) onConfirm;
   final VoidCallback onCancel;
 
@@ -4915,6 +5724,7 @@ class PayLaterModalWidget extends StatefulWidget {
     super.key,
     required this.order,
     required this.defaultName,
+    this.orderTotal,
     required this.onConfirm,
     required this.onCancel,
   });
@@ -4944,25 +5754,11 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
 
   @override
   Widget build(BuildContext context) {
-    num orderTotal = 0;
-    if (widget.order['items'] is List) {
-      for (var i in widget.order['items']) {
-        final price =
-            num.tryParse(
-              ((i['item'] is Map ? i['item']['branchPrice'] : null) ??
-                      i['basePrice'] ??
-                      0)
-                  .toString(),
-            ) ??
-            0;
-        final qty = num.tryParse((i['quantity'] ?? 1).toString()) ?? 1;
-        orderTotal += (price * qty);
-      }
-    }
+    final num orderTotal = widget.orderTotal ?? orderItemsSum(widget.order);
 
     final paidNowVal = num.tryParse(_paidCtrl.text) ?? 0;
     final remaining = (orderTotal > 0 && paidNowVal > 0)
-        ? (orderTotal - paidNowVal)
+        ? fix2(orderTotal - paidNowVal)
         : null;
 
     final isConfirmDisabled =
@@ -5122,7 +5918,7 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
                               ),
                             ),
                             Text(
-                              '₹$orderTotal',
+                              '₹${inr(orderTotal)}',
                               style: TextStyle(
                                 fontSize: 14.sp,
                                 fontWeight: FontWeight.w900,
@@ -5144,7 +5940,7 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
                               ),
                             ),
                             Text(
-                              '- ₹$paidNowVal',
+                              '- ₹${inr(paidNowVal)}',
                               style: TextStyle(
                                 fontSize: 14.sp,
                                 fontWeight: FontWeight.w900,
@@ -5166,7 +5962,7 @@ class _PayLaterModalWidgetState extends State<PayLaterModalWidget> {
                               ),
                             ),
                             Text(
-                              '₹$remaining',
+                              '₹${inr(remaining ?? 0)}',
                               style: TextStyle(
                                 fontSize: 16.sp,
                                 fontWeight: FontWeight.w900,

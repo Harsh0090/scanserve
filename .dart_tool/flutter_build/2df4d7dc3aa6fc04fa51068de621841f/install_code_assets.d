@@ -1,0 +1,1 @@
+ E:\\Flutter\\scanserve\\scanserve\\.dart_tool\\flutter_build\\2df4d7dc3aa6fc04fa51068de621841f\\native_assets.json: 
