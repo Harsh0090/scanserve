@@ -5,6 +5,7 @@ import 'onboarding_gate.dart';
 import 'context/AuthContext.dart';
 import 'context/OnboardingContext.dart';
 import 'context/TrialContext.dart';
+import '../services/auto_kot_print_service.dart';
 
 import 'signup/page.dart';
 
@@ -37,13 +38,57 @@ class DummyScreen extends StatelessWidget {
   Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(title)), body: Center(child: Text(title)));
 }
 
-class RootLayout extends ConsumerWidget {
+/// Shows auto-KOT print failures from anywhere in the app.
+final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
+
+class RootLayout extends ConsumerStatefulWidget {
   const RootLayout({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RootLayout> createState() => _RootLayoutState();
+}
+
+class _RootLayoutState extends ConsumerState<RootLayout> {
+  late final AutoKotPrintManager _autoKot;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GLOBAL AUTO-KOT
+  // Lives at the app root — NOT in DashboardLayout — so live orders keep
+  // printing while the Live Menu, settings or any other screen is open.
+  // Tying it to a single screen's lifecycle would disconnect the socket the
+  // moment that screen is popped.
+  // ─────────────────────────────────────────────────────────────────────────
+  @override
+  void initState() {
+    super.initState();
+    _autoKot = ref.read(autoKotPrintManagerProvider);
+    _autoKot.onPrintError = (message) {
+      rootMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    };
+    ref.listenManual<AuthState>(authProvider, (_, next) {
+      final restaurantId = AutoKotPrintManager.restaurantIdOf(next.user);
+      if (restaurantId == null) {
+        _autoKot.disconnect();
+      } else {
+        _autoKot.connect(restaurantId);
+      }
+    }, fireImmediately: true);
+  }
+
+  @override
+  void dispose() {
+    _autoKot.onPrintError = null;
+    _autoKot.disconnect();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // We implicitly initialize the providers by watching or reading them if needed,
-    // but in Riverpod putting `ProviderScope` at the root naturally initializes them 
+    // but in Riverpod putting `ProviderScope` at the root naturally initializes them
     // when they are first read.
     ref.watch(authProvider);
     ref.watch(trialProvider);
@@ -68,6 +113,7 @@ class RootLayout extends ConsumerWidget {
             return MaterialApp.router(
               title: 'ScanServe',
               debugShowCheckedModeBanner: false,
+              scaffoldMessengerKey: rootMessengerKey,
               theme: ThemeData(
                 scaffoldBackgroundColor: const Color(0xFFF8FAFC),
                 fontFamily: 'SF Pro Display',

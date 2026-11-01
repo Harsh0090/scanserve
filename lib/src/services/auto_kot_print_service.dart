@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../app/context/AuthContext.dart';
 import '../utils/apiConfig.dart';
+import 'bluetooth_printer_service.dart';
 import 'kot_print_service.dart';
 
 /// Signature of the function that actually dispatches a KOT
@@ -15,6 +16,7 @@ typedef KotPrintFn = Future<void> Function({
   String? tableNumber,
   String? customerName,
   String? restaurantName,
+  bool bluetoothOnly,
 });
 
 /// Global Auto-KOT engine.
@@ -36,6 +38,14 @@ class AutoKotPrintManager {
   /// (e.g. order placed via MenuModal) — see [locallyPrintedOrderIds].
   final bool Function(String key) isLocallyPrinted;
 
+  /// True when a thermal printer is paired to THIS device.
+  ///
+  /// The backend stamps every socket payload with `skipAutoPrint: true` once
+  /// it has run its own PrintNode job. That job prints on the PrintNode
+  /// printer, which is never the Bluetooth printer attached to this device —
+  /// so when this returns true the local ticket still has to be printed.
+  final Future<bool> Function() hasLocalPrinter;
+
   /// Called when an auto-print fails (DashboardLayout surfaces a snackbar).
   void Function(String message)? onPrintError;
 
@@ -51,10 +61,11 @@ class AutoKotPrintManager {
     required this.readUser,
     required this.printKOT,
     required this.isLocallyPrinted,
+    Future<bool> Function()? hasLocalPrinter,
     this.onPrintError,
     this.localPrintGrace = const Duration(milliseconds: 1500),
     this.dedupeWindow = const Duration(seconds: 25),
-  });
+  }) : hasLocalPrinter = hasLocalPrinter ?? (() async => false);
 
   /// Key used in [locallyPrintedOrderIds] by MenuModal when it prints
   /// add-on items for an existing order on this device.
@@ -100,6 +111,14 @@ class AutoKotPrintManager {
     return userData['liveOrderKOT'] == true;
   }
 
+  /// True when [shouldAutoPrint] said no *only* because the backend already
+  /// ran its own PrintNode job (`skipAutoPrint: true`, which the server stamps
+  /// on every socket payload). A printer paired to this device is not the
+  /// PrintNode printer, so that ticket still has to come out here — the caller
+  /// confirms with [hasLocalPrinter] and then prints Bluetooth-only.
+  static bool needsLocalCopy(Map order, Map userData) =>
+      order['skipAutoPrint'] == true && userData['liveOrderKOT'] == true;
+
   static bool _hasKitchenItems(List items) =>
       items.any((i) => i is Map && i['skipKitchen'] != true);
 
@@ -143,7 +162,10 @@ class AutoKotPrintManager {
     final items = order['items'] is List ? List<dynamic>.from(order['items']) : <dynamic>[];
     if (items.isEmpty || !_hasKitchenItems(items)) return;
 
-    if (!shouldAutoPrint(order, userDataOf(readUser()))) return;
+    final userData = userDataOf(readUser());
+    final autoOk = shouldAutoPrint(order, userData);
+    final localCopy = !autoOk && needsLocalCopy(order, userData);
+    if (!autoOk && !localCopy) return;
     if (!_claim('$orderId-new')) return;
 
     Future.delayed(localPrintGrace, () async {
@@ -151,9 +173,13 @@ class AutoKotPrintManager {
         debugPrint('⚙️ AutoKOT: $orderId already printed on this device, skipping.');
         return;
       }
+      if (localCopy && !await hasLocalPrinter()) {
+        debugPrint('⚙️ AutoKOT: backend already printed $orderId and no printer is paired here, skipping.');
+        return;
+      }
       _autoPrintedOrders[orderId] = DateTime.now();
       _prune();
-      await _execute(orderId, items, false, tableNumber, customerName);
+      await _execute(orderId, items, false, tableNumber, customerName, bluetoothOnly: localCopy);
     });
   }
 
@@ -169,7 +195,10 @@ class AutoKotPrintManager {
     final newItems = order['newItems'] is List ? List<dynamic>.from(order['newItems']) : <dynamic>[];
     if (newItems.isEmpty || !_hasKitchenItems(newItems)) return;
 
-    if (!shouldAutoPrint(order, userDataOf(readUser()))) return;
+    final userData = userDataOf(readUser());
+    final autoOk = shouldAutoPrint(order, userData);
+    final localCopy = !autoOk && needsLocalCopy(order, userData);
+    if (!autoOk && !localCopy) return;
     final printKey =
         '$orderId-addon-${newItems.length}-${order['updatedAt'] ?? DateTime.now().millisecondsSinceEpoch}';
     if (!_claim(printKey)) return;
@@ -184,8 +213,12 @@ class AutoKotPrintManager {
         debugPrint('⚙️ AutoKOT: add-on for $orderId already printed on this device, skipping.');
         return;
       }
+      if (localCopy && !await hasLocalPrinter()) {
+        debugPrint('⚙️ AutoKOT: backend already printed the add-on for $orderId and no printer is paired here, skipping.');
+        return;
+      }
       // Prints ONLY the new add-on items
-      await _execute(orderId, newItems, true, tableNumber, customerName);
+      await _execute(orderId, newItems, true, tableNumber, customerName, bluetoothOnly: localCopy);
     });
   }
 
@@ -194,8 +227,9 @@ class AutoKotPrintManager {
     List<dynamic> items,
     bool isAddOn,
     String? tableNumber,
-    String? customerName,
-  ) async {
+    String? customerName, {
+    bool bluetoothOnly = false,
+  }) async {
     try {
       final user = readUser();
       final restName = user?['restaurants']?[0]?['name'] ??
@@ -208,6 +242,7 @@ class AutoKotPrintManager {
         tableNumber: tableNumber,
         customerName: customerName,
         restaurantName: restName?.toString(),
+        bluetoothOnly: bluetoothOnly,
       );
       debugPrint('🖨️ Auto-KOT printed successfully [${isAddOn ? "ADD-ON" : "NEW"}] for $orderId');
     } catch (e) {
@@ -259,6 +294,7 @@ final autoKotPrintManagerProvider = Provider<AutoKotPrintManager>((ref) {
       String? tableNumber,
       String? customerName,
       String? restaurantName,
+      bool bluetoothOnly = false,
     }) =>
         ref.read(kotPrintServiceProvider).printKOT(
               orderId: orderId,
@@ -267,8 +303,10 @@ final autoKotPrintManagerProvider = Provider<AutoKotPrintManager>((ref) {
               tableNumber: tableNumber,
               customerName: customerName,
               restaurantName: restaurantName,
+              bluetoothOnly: bluetoothOnly,
             ),
     isLocallyPrinted: (key) => ref.read(locallyPrintedOrderIds).contains(key),
+    hasLocalPrinter: () => ref.read(bluetoothPrinterServiceProvider).hasConfiguredPrinter(),
   );
   ref.onDispose(manager.disconnect);
   return manager;

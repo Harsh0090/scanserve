@@ -6,7 +6,9 @@ class PrintCall {
   final List<dynamic> items;
   final bool isAddOn;
   final String? tableNumber;
-  PrintCall(this.orderId, this.items, this.isAddOn, this.tableNumber);
+  final bool bluetoothOnly;
+  PrintCall(this.orderId, this.items, this.isAddOn, this.tableNumber,
+      {this.bluetoothOnly = false});
 }
 
 void main() {
@@ -16,6 +18,8 @@ void main() {
   late AutoKotPrintManager manager;
   bool failPrint = false;
   String? lastError;
+  // No thermal printer paired to this device unless a test says otherwise.
+  bool localPrinterPaired = false;
 
   const grace = Duration(milliseconds: 20);
 
@@ -25,9 +29,11 @@ void main() {
     localPrinted = {};
     failPrint = false;
     lastError = null;
+    localPrinterPaired = false;
     manager = AutoKotPrintManager(
       readUser: () => user,
       isLocallyPrinted: localPrinted.contains,
+      hasLocalPrinter: () async => localPrinterPaired,
       localPrintGrace: grace,
       dedupeWindow: const Duration(milliseconds: 200),
       onPrintError: (m) => lastError = m,
@@ -38,9 +44,11 @@ void main() {
         String? tableNumber,
         String? customerName,
         String? restaurantName,
+        bool bluetoothOnly = false,
       }) async {
         if (failPrint) throw Exception('printer offline');
-        calls.add(PrintCall(orderId, items, isAddOn, tableNumber));
+        calls.add(PrintCall(orderId, items, isAddOn, tableNumber,
+            bluetoothOnly: bluetoothOnly));
       },
     );
   });
@@ -99,6 +107,42 @@ void main() {
       manager.handleNewOrder(order(skipAutoPrint: true));
       await settle();
       expect(calls, isEmpty);
+    });
+
+    // Live Menu orders: the backend stamps every socket payload with
+    // skipAutoPrint: true once it has run its own PrintNode job. That job
+    // never reaches a thermal printer paired to this device, so the local
+    // ticket must still print — Bluetooth-only, so the backend PrintNode job
+    // is not triggered a second time.
+    test('skipAutoPrint == true still prints locally when a printer is paired here', () async {
+      localPrinterPaired = true;
+      manager.handleNewOrder(order(skipAutoPrint: true));
+      await settle();
+      expect(calls, hasLength(1));
+      expect(calls.single.bluetoothOnly, isTrue);
+    });
+
+    test('local copy is not printed when liveOrderKOT is OFF', () async {
+      localPrinterPaired = true;
+      user['liveOrderKOT'] = false;
+      manager.handleNewOrder(order(skipAutoPrint: true));
+      await settle();
+      expect(calls, isEmpty);
+    });
+
+    test('local copy still excludes KDS-off items', () async {
+      localPrinterPaired = true;
+      manager.handleNewOrder(order(skipAutoPrint: true, items: [
+        {'item': 'tea', 'quantity': 1, 'skipKitchen': true},
+      ]));
+      await settle();
+      expect(calls, isEmpty);
+    });
+
+    test('normal auto-print is not flagged Bluetooth-only', () async {
+      manager.handleNewOrder(order());
+      await settle();
+      expect(calls.single.bluetoothOnly, isFalse);
     });
 
     test('skipAutoPrint == false forces print even with liveOrderKOT OFF', () async {

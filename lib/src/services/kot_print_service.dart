@@ -63,6 +63,10 @@ class KotPrintService {
   /// Checks for configured Bluetooth printer first (direct zero-dependency print).
   /// If no Bluetooth printer is configured or direct print fails, falls back
   /// seamlessly to backend PrintNode API.
+  /// [bluetoothOnly] prints through the paired thermal printer and never falls
+  /// back to the backend PrintNode endpoint. Used when the backend already ran
+  /// its own PrintNode job for this ticket, so the only thing still missing is
+  /// the copy on the printer attached to this device.
   Future<void> printKOT({
     required String orderId,
     required List<dynamic> items,
@@ -70,6 +74,7 @@ class KotPrintService {
     String? tableNumber,
     String? customerName,
     String? restaurantName,
+    bool bluetoothOnly = false,
   }) async {
     // Step 1: Keep only KDS ON items; the ticket never includes KDS OFF items
     final List<Map<String, dynamic>> kitchenItems = [];
@@ -111,6 +116,13 @@ class KotPrintService {
       } catch (e) {
         debugPrint("⚠️ KotPrintService: Bluetooth print error ($e), falling back to backend...");
       }
+    }
+
+    if (bluetoothOnly) {
+      // The backend already ran its own PrintNode job for this ticket; calling
+      // it again here would print the same KOT twice.
+      debugPrint("ℹ️ KotPrintService: Bluetooth-only print for order $orderId; not calling backend.");
+      return;
     }
 
     debugPrint(

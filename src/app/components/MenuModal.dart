@@ -489,8 +489,6 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             'placedBy': 'STAFF',
             'skipAutoPrint': !shouldPrintKOT,
           });
-          debugPrint('🔎 MenuModal DEBUG: append-items sent=$newCartItems');
-          debugPrint('🔎 MenuModal DEBUG: append-items response=$updatedOrder');
         }
 
         // Remove fully-deleted lines
