@@ -33,6 +33,7 @@ class MockBluetoothPrinterService extends BluetoothPrinterService {
   bool isPrintKOTCalled = false;
   bool isPrintBillCalled = false;
   bool hasConfigured = false;
+  List<dynamic>? kotItemsSent;
 
   @override
   Future<bool> hasConfiguredPrinter() async => hasConfigured;
@@ -47,6 +48,7 @@ class MockBluetoothPrinterService extends BluetoothPrinterService {
     String? restaurantName,
   }) async {
     isPrintKOTCalled = true;
+    kotItemsSent = items;
     return true;
   }
 
@@ -217,6 +219,83 @@ void main() {
       await btService.printBill(bill: bill);
 
       expect(mockBt.isPrintBillCalled, isTrue);
+      expect(mockAdapter.lastRequest, isNull);
+    });
+
+    test('OrderItem.isKdsOn is true for KDS ON, false for KDS OFF', () {
+      final kdsOn = OrderItem.fromJson({'item': 'a', 'quantity': 1, 'skipKitchen': false});
+      final kdsOff = OrderItem.fromJson({'item': 'b', 'quantity': 1, 'skipKitchen': true});
+
+      expect(kdsOn.isKdsOn, isTrue);
+      expect(kdsOff.isKdsOn, isFalse);
+    });
+
+    test('OrderItem with missing skipKitchen is treated as KDS ON', () {
+      final item = OrderItem.fromJson({'item': 'a', 'quantity': 1});
+
+      expect(item.isKdsOn, isTrue);
+    });
+
+    test('printKOT sends only KDS ON OrderItems to backend', () async {
+      mockAdapter.responseData = '{"success": true}';
+
+      final items = [
+        OrderItem(item: {'_id': 'burger', 'branchName': 'Burger'}, quantity: 2),
+        OrderItem(item: {'_id': 'tea', 'branchName': 'Tea'}, quantity: 1, skipKitchen: true),
+      ];
+
+      await service.printKOT(orderId: 'ord-model', items: items);
+
+      final sent = (mockAdapter.lastRequest!.data as Map)['items'] as List;
+      expect(sent, hasLength(1));
+      expect((sent[0] as Map)['item']['branchName'], 'Burger');
+    });
+
+    test('printKOT never includes KDS OFF items (Map input, mixed)', () async {
+      mockAdapter.responseData = '{"success": true}';
+
+      final items = [
+        {'item': {'_id': 'a', 'branchName': 'Pizza'}, 'quantity': 1},
+        {'item': {'_id': 'b', 'branchName': 'Cigarette'}, 'quantity': 3, 'skipKitchen': true},
+      ];
+
+      await service.printKOT(orderId: 'ord-map', items: items);
+
+      final sent = (mockAdapter.lastRequest!.data as Map)['items'] as List;
+      expect(sent, hasLength(1));
+      expect((sent[0] as Map)['item']['branchName'], 'Pizza');
+    });
+
+    test('Bluetooth path receives the same KDS ON-only list', () async {
+      final mockBt = MockBluetoothPrinterService();
+      mockBt.hasConfigured = true;
+      final btService = KotPrintService(dio: dio, btService: mockBt);
+
+      final items = [
+        OrderItem(item: {'_id': 'biryani', 'branchName': 'Biryani'}, quantity: 1),
+        OrderItem(item: {'_id': 'tea', 'branchName': 'Tea'}, quantity: 2, skipKitchen: true),
+      ];
+
+      await btService.printKOT(orderId: 'bt-filter', items: items);
+
+      expect(mockBt.isPrintKOTCalled, isTrue);
+      expect(mockBt.kotItemsSent, hasLength(1));
+      expect((mockBt.kotItemsSent![0] as Map)['item']['branchName'], 'Biryani');
+      expect(mockAdapter.lastRequest, isNull);
+    });
+
+    test('printKOT sends nothing when every OrderItem is KDS OFF', () async {
+      final mockBt = MockBluetoothPrinterService();
+      mockBt.hasConfigured = true;
+      final btService = KotPrintService(dio: dio, btService: mockBt);
+
+      final items = [
+        OrderItem(item: 'tea', quantity: 1, skipKitchen: true),
+      ];
+
+      await btService.printKOT(orderId: 'all-off', items: items);
+
+      expect(mockBt.isPrintKOTCalled, isFalse);
       expect(mockAdapter.lastRequest, isNull);
     });
   });

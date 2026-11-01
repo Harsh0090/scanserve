@@ -21,6 +21,10 @@ class OrderItem {
     this.name,
   });
 
+  /// KDS ON means the item goes on the kitchen ticket. Stored as `skipKitchen`
+  /// (inverted); a missing value counts as ON, matching the backend filter.
+  bool get isKdsOn => skipKitchen != true;
+
   factory OrderItem.fromJson(Map<String, dynamic> json) {
     return OrderItem(
       item: json['item'],
@@ -53,8 +57,8 @@ class KotPrintService {
 
   /// Core print function for Kitchen Order Ticket
   ///
-  /// Filters out items where [skipKitchen == true]. If no kitchen items remain,
-  /// returns early without calling any print service.
+  /// Filters out items where KDS is OFF (`skipKitchen == true`). If no kitchen
+  /// items remain, returns early without calling any print service.
   ///
   /// Checks for configured Bluetooth printer first (direct zero-dependency print).
   /// If no Bluetooth printer is configured or direct print fails, falls back
@@ -67,24 +71,21 @@ class KotPrintService {
     String? customerName,
     String? restaurantName,
   }) async {
-    // Step 1: Normalize items and filter out skipKitchen == true
+    // Step 1: Keep only KDS ON items; the ticket never includes KDS OFF items
     final List<Map<String, dynamic>> kitchenItems = [];
 
+    debugPrint("🔎 KotPrintService DEBUG: printKOT called with ${items.length} raw item(s) for order $orderId:");
     for (final raw in items) {
+      debugPrint("🔎   raw=$raw (type=${raw.runtimeType})");
       if (raw is OrderItem) {
-        if (!raw.skipKitchen) {
+        if (raw.isKdsOn) {
           kitchenItems.add(raw.toJson());
         }
-      } else if (raw is Map<String, dynamic>) {
-        if (raw['skipKitchen'] != true) {
-          kitchenItems.add(Map<String, dynamic>.from(raw));
-        }
-      } else if (raw is Map) {
-        if (raw['skipKitchen'] != true) {
-          kitchenItems.add(Map<String, dynamic>.from(raw));
-        }
+      } else if (raw is Map && raw['skipKitchen'] != true) {
+        kitchenItems.add(Map<String, dynamic>.from(raw));
       }
     }
+    debugPrint("🔎 KotPrintService DEBUG: ${kitchenItems.length} item(s) survived the KDS filter.");
 
     if (kitchenItems.isEmpty) {
       debugPrint("ℹ️ KotPrintService: No kitchen items to print (all skipped or empty).");

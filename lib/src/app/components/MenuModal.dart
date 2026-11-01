@@ -106,6 +106,18 @@ class _MenuModalState extends ConsumerState<MenuModal> {
     return userData['autoPrintKOT'] == true || userData['liveOrderKOT'] == true;
   }
 
+  /// Looks up the live KDS flag for a menu item by id, from [_allItems].
+  /// Items the menu list doesn't have (or with no flag at all) default to
+  /// KDS ON, matching the backend's `skipKitchen !== true` filter.
+  bool _menuItemSkipKitchen(String? menuItemId) {
+    if (menuItemId == null || menuItemId.isEmpty) return false;
+    final match = _allItems.firstWhere(
+      (m) => (m is Map && (m['_id'] ?? '').toString() == menuItemId),
+      orElse: () => null,
+    );
+    return match is Map && match['skipKitchen'] == true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -452,7 +464,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
             updatedKOTItems.add({
               'item': {'branchName': line['name']},
               'quantity': delta,
-              'skipKitchen': false,
+              'skipKitchen': _menuItemSkipKitchen(line['itemRefId']?.toString()),
               if (line['note'] != null && line['note'].toString().trim().isNotEmpty)
                 'note': line['note'].toString().trim(),
             });
@@ -505,7 +517,15 @@ class _MenuModalState extends ConsumerState<MenuModal> {
         // ── KOT for newly appended cart items ──
         if (shouldPrintKOT && updatedOrder != null && _cart.isNotEmpty) {
           try {
-            final newOrderItems = _cart.values.map((i) {
+            // The backend response's `addedItems` carries the authoritative,
+            // DB-sourced `skipKitchen` for exactly the items just added (and
+            // only the newly-added quantity, not any pre-existing quantity
+            // on the same line) — the public menu list used to build `_cart`
+            // has no KDS field at all, so it must never be trusted for this.
+            final backendAdded = (updatedOrder is Map && updatedOrder['addedItems'] is List)
+                ? List<dynamic>.from(updatedOrder['addedItems'])
+                : null;
+            final newOrderItems = backendAdded ?? _cart.values.map((i) {
               final idStr = (i['_id'] ?? '').toString();
               final note = _notesByItemId[idStr]?.isNotEmpty == true
                   ? _notesByItemId[idStr]!
@@ -516,7 +536,7 @@ class _MenuModalState extends ConsumerState<MenuModal> {
                 'item': {'branchName': i['name'] ?? ''},
                 'name': i['name'] ?? '',
                 'quantity': i['quantity'],
-                'skipKitchen': false,
+                'skipKitchen': _menuItemSkipKitchen(idStr),
                 if (note.isNotEmpty) 'note': note,
                 if (note.isNotEmpty) 'instruction': note,
               };

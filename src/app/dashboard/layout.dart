@@ -4,6 +4,8 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../components/Sidebar.dart';
 import '../../services/order_alarm_service.dart';
+import '../../services/auto_kot_print_service.dart';
+import '../context/AuthContext.dart';
 
 // ─── Breakpoint ────────────────────────────────────────────────────────────
 // Screens with a logical width ≥ 768 dp are treated as "tablet" mode.
@@ -19,6 +21,39 @@ class DashboardLayout extends ConsumerStatefulWidget {
 
 class _DashboardLayoutState extends ConsumerState<DashboardLayout> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  late final AutoKotPrintManager _autoKot;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GLOBAL AUTO-KOT
+  // Lives in the dashboard shell (like the website's layout.js) so live
+  // orders print on every dashboard screen, not only on the Orders page.
+  // ─────────────────────────────────────────────────────────────────────────
+  @override
+  void initState() {
+    super.initState();
+    _autoKot = ref.read(autoKotPrintManagerProvider);
+    _autoKot.onPrintError = (message) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    };
+    ref.listenManual<AuthState>(authProvider, (_, next) {
+      final restaurantId = AutoKotPrintManager.restaurantIdOf(next.user);
+      if (restaurantId == null) {
+        _autoKot.disconnect();
+      } else {
+        _autoKot.connect(restaurantId);
+      }
+    }, fireImmediately: true);
+  }
+
+  @override
+  void dispose() {
+    _autoKot.onPrintError = null;
+    _autoKot.disconnect();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
